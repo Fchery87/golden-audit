@@ -7,7 +7,7 @@
     "dev:web": "tsx apps/web/src/server.ts",
     "dev:worker": "tsx apps/worker/src/server.ts",
     "dev:admin": "tsx apps/admin/src/server.ts",
-    "build": "npm run typecheck && npm run test",
+    "build": "tsc --noEmit && node scripts/build-check.mjs",
     "typecheck": "tsc --noEmit",
     "test": "tsx --test", 
     "db:migrate": "tsx scripts/migrate.ts",
