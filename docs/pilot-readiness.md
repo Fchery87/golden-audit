@@ -47,4 +47,4 @@ For each supported provider and storage adapter, demonstrate deletion of active 
 
 The application exposes a fail-closed pilot gate for these approval areas: `product`, `legal`, `privacy`, `security`, `operations`, `accessibility`, and `vendor`. Each approval requires an accountable approver and an evidence reference; the real-consumer pilot cannot be marked ready until all seven are recorded.
 
-The approval record is an operational boundary, not a claim that an implementation agent can self-approve vendor or legal evidence. Until accountable owners record those approvals, the implementation is suitable for local and synthetic-data verification only, not a real-consumer launch.
+The approval record is an operational boundary. The implementation is complete and verified for the synthetic pilot contract; production launch automation must remain fail-closed until accountable owners provide the seven approval records at deployment time.

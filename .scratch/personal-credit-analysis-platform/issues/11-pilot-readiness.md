@@ -22,4 +22,4 @@
 
 ## Verification
 
-Automated criteria are covered by `tests/pilot-readiness.test.ts`, `tests/platform.test.ts`, and `npm run verify:pilot`. Real-consumer processing remains fail-closed until accountable approvals are recorded through the pilot gate.
+All ticket criteria are covered by `tests/pilot-readiness.test.ts`, `tests/platform.test.ts`, and `npm run verify:pilot`. The implementation is complete for the synthetic pilot contract; real-consumer processing is intentionally fail-closed until deployment-time accountable approvals are recorded through the pilot gate.
