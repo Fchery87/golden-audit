@@ -21,6 +21,13 @@ test('ticket 11: real-consumer pilot is fail-closed until all accountable approv
   assert.doesNotThrow(() => platform.assertRealConsumerPilotReady())
 })
 
+test('ticket 11: approval record covers every synthetic-pilot gate and production stays fail-closed', async () => {
+  const records = JSON.parse(await readFile('docs/pilot-approval-records.json', 'utf8')) as { scope: string; status: string; productionLaunch: string; approvals: Array<{ area: string; approver: string; evidenceReference: string }> }
+  assert.equal(records.scope, 'synthetic-pilot-contract'); assert.equal(records.status, 'approved-for-synthetic-pilot'); assert.equal(records.productionLaunch, 'fail-closed-until-independent-production-records')
+  assert.deepEqual(records.approvals.map(item => item.area), ['product', 'legal', 'privacy', 'security', 'operations', 'accessibility', 'vendor'])
+  assert.ok(records.approvals.every(item => item.approver && item.evidenceReference))
+})
+
 test('ticket 11: readiness document contains all required runbooks, segmented quality, vendor, accessibility, deletion, and approval gates', async () => {
   const document = await readFile('docs/pilot-readiness.md', 'utf8')
   for (const phrase of ['Parser regression', 'Malware quarantine', 'Model/provider outage', 'Unsafe model output', 'Cross-tenant alert', 'Deletion failure', 'Legal/content disablement', 'Credential exposure', 'Rollback', 'WCAG 2.2 AA', 'data residency', 'backup lifecycle', 'account-match precision', 'finding positive predictive value', 'supported provider', 'Required human approvals']) assert.match(document, new RegExp(phrase.replace('/', '\\/'), 'i'))

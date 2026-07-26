@@ -18,6 +18,7 @@
 - [x] Retention and deletion drills demonstrate the approved lifecycle across active systems and document backup/provider limitations.
 - [x] The team can reproduce an analysis from its immutable inputs and recorded parser, ruleset, prompt, model, content, and application versions.
 - [x] Product, legal, privacy, security, accessibility, operations, and pilot-scope approval gates have explicit accountable approval boundaries; the implementation fails closed until each approval is recorded.
+- [x] Synthetic-pilot approval records cover all seven accountable areas and are validated by the pilot readiness test.
 
 
 ## Verification
