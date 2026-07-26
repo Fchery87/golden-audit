@@ -3,7 +3,7 @@ import { join } from 'node:path'
 
 const databaseDirectory = join(process.cwd(), 'database', 'local')
 const statePath = join(databaseDirectory, 'schema-migrations.json')
-const migrationVersion = '001_foundation'
+const migrationVersions = ['001_foundation', '002_product_platform']
 
 await mkdir(databaseDirectory, { recursive: true })
 let applied: string[] = []
@@ -14,6 +14,8 @@ try {
 } catch {
   // A missing state file represents a fresh isolated environment.
 }
-if (!applied.includes(migrationVersion)) applied.push(migrationVersion)
+for (const migrationVersion of migrationVersions) {
+  if (!applied.includes(migrationVersion)) applied.push(migrationVersion)
+}
 await writeFile(statePath, `${JSON.stringify(applied, null, 2)}\n`)
 console.log(`Applied migrations: ${applied.join(', ')}`)

@@ -35,7 +35,7 @@ try {
     }
     throw new Error(`${name} did not become healthy`)
   }))
-  console.log(JSON.stringify({ status: 'ok', services: health, database: { status: 'ok', migrationVersion: '001_foundation' } }))
+  console.log(JSON.stringify({ status: 'ok', services: health, database: { status: 'ok', migrationVersion: '002_product_platform' } }))
 } finally {
   for (const child of children) child.kill()
   await Promise.all(children.map(child => once(child, 'exit').catch(() => undefined)))

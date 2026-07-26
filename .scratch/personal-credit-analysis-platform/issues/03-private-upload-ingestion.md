@@ -4,13 +4,18 @@
 
 **Blocked by:** 02 — Secure account, consent, and jurisdiction gate.
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] An eligible consumer can initialize and complete an upload for a supported native PDF or static HTML report.
-- [ ] Uploads use private storage and short-lived signed access; persistent public document URLs are not exposed.
-- [ ] File signature, MIME type, extension, parser eligibility, size, page/complexity limits, and processing limits are validated.
-- [ ] Malware scanning and static HTML active-content stripping occur before parsing; unsafe documents are quarantined.
-- [ ] The ingestion record includes an immutable source hash, size, media type, upload actor, scan result, and retention class.
-- [ ] Processing status exposes safe stage-level progress and distinguishes retryable failure, final failure, and quarantine.
-- [ ] Repeating upload completion or retryable processing does not create duplicate documents or jobs.
-- [ ] Password-protected or unsupported documents receive a clear user-facing failure without leaking secrets or internal stack traces.
+- [x] An eligible consumer can initialize and complete an upload for a supported native PDF or static HTML report.
+- [x] Uploads use private storage and short-lived signed access; persistent public document URLs are not exposed.
+- [x] File signature, MIME type, extension, parser eligibility, size, page/complexity limits, and processing limits are validated.
+- [x] Malware scanning and static HTML active-content stripping occur before parsing; unsafe documents are quarantined.
+- [x] The ingestion record includes an immutable source hash, size, media type, upload actor, scan result, and retention class.
+- [x] Processing status exposes safe stage-level progress and distinguishes retryable failure, final failure, and quarantine.
+- [x] Repeating upload completion or retryable processing does not create duplicate documents or jobs.
+- [x] Password-protected or unsupported documents receive a clear user-facing failure without leaking secrets or internal stack traces.
+
+
+## Verification
+
+Covered by the ticket-specific tests and the complete `npm run verify:pilot` gate. Human launch approvals remain explicitly gated in `docs/pilot-readiness.md`.

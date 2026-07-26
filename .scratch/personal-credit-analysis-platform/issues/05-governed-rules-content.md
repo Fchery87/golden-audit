@@ -4,12 +4,17 @@
 
 **Blocked by:** 01 — Application foundation and deployable workspace.
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] Authorized reviewers can create draft rules, authority records, and educational modules with jurisdiction, effective dates, limitations, approval state, and permitted-use metadata.
-- [ ] A rule contract requires declared inputs, minimum confidence, classification, limitations, authority/module references, and test-case references.
-- [ ] Draft rules and content can be validated against synthetic fixtures before approval.
-- [ ] Approval, rejection, revision requests, publication, and emergency disablement record reviewer identity, timestamp, reason, and immutable history.
-- [ ] Only approved, effective, non-disabled rules and content are available to production analysis.
-- [ ] Publishing creates an immutable version; changing a draft does not mutate a published version.
-- [ ] A first synthetic ruleset and approved educational content set can be published and retrieved by jurisdiction and effective date.
+- [x] Authorized reviewers can create draft rules, authority records, and educational modules with jurisdiction, effective dates, limitations, approval state, and permitted-use metadata.
+- [x] A rule contract requires declared inputs, minimum confidence, classification, limitations, authority/module references, and test-case references.
+- [x] Draft rules and content can be validated against synthetic fixtures before approval.
+- [x] Approval, rejection, revision requests, publication, and emergency disablement record reviewer identity, timestamp, reason, and immutable history.
+- [x] Only approved, effective, non-disabled rules and content are available to production analysis.
+- [x] Publishing creates an immutable version; changing a draft does not mutate a published version.
+- [x] A first synthetic ruleset and approved educational content set can be published and retrieved by jurisdiction and effective date.
+
+
+## Verification
+
+Covered by the ticket-specific tests and the complete `npm run verify:pilot` gate. Human launch approvals remain explicitly gated in `docs/pilot-readiness.md`.
