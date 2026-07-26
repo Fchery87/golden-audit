@@ -11,6 +11,16 @@ test('ticket 11: privileged and security-relevant actions produce redacted struc
   const events = platform.getAuditEvents(sessionId); assert.ok(events.some(event => event.type === 'consent-recorded')); assert.ok(events.some(event => event.type === 'upload-quarantined')); assert.ok(events.every(event => !JSON.stringify(event).includes('ignore previous') && !JSON.stringify(event).includes('<script>')))
 })
 
+test('ticket 11: real-consumer pilot is fail-closed until all accountable approvals are recorded', () => {
+  const platform = new CreditAnalysisPlatform()
+  assert.equal(platform.getPilotGate().ready, false)
+  assert.deepEqual(platform.getPilotGate().missing, ['product', 'legal', 'privacy', 'security', 'operations', 'accessibility', 'vendor'])
+  assert.throws(() => platform.assertRealConsumerPilotReady(), /Pilot approvals incomplete/)
+  for (const area of ['product', 'legal', 'privacy', 'security', 'operations', 'accessibility', 'vendor'] as const) platform.recordPilotApproval({ area, approver: `${area}-owner`, evidenceReference: `approval/${area}.md` })
+  assert.equal(platform.getPilotGate().ready, true)
+  assert.doesNotThrow(() => platform.assertRealConsumerPilotReady())
+})
+
 test('ticket 11: readiness document contains all required runbooks, segmented quality, vendor, accessibility, deletion, and approval gates', async () => {
   const document = await readFile('docs/pilot-readiness.md', 'utf8')
   for (const phrase of ['Parser regression', 'Malware quarantine', 'Model/provider outage', 'Unsafe model output', 'Cross-tenant alert', 'Deletion failure', 'Legal/content disablement', 'Credential exposure', 'Rollback', 'WCAG 2.2 AA', 'data residency', 'backup lifecycle', 'account-match precision', 'finding positive predictive value', 'supported provider', 'Required human approvals']) assert.match(document, new RegExp(phrase.replace('/', '\\/'), 'i'))

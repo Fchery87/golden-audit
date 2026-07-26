@@ -152,6 +152,9 @@ export type ConsumerReport = { id: Id; userId: Id; analysisId: Id; limitations: 
 export type ExportArtifact = { id: Id; userId: Id; reportId: Id; content: string; createdAt: string }
 export type DeletionJob = { id: Id; userId: Id; status: 'pending-provider' | 'complete'; deleted: string[]; delayed: string[]; completedAt?: string }
 export type AuditEvent = { type: string; actorId: Id; subjectId: Id; at: string; metadata: Record<string, string> }
+export type PilotApprovalArea = 'product' | 'legal' | 'privacy' | 'security' | 'operations' | 'accessibility' | 'vendor'
+export type PilotApproval = { area: PilotApprovalArea; approver: string; evidenceReference: string; approvedAt: string }
+export type PilotGate = { ready: boolean; missing: PilotApprovalArea[]; approvals: PilotApproval[] }
 
 const now = () => new Date().toISOString()
 const hashPassword = (password: string, salt: string) => scryptSync(password, salt, 32).toString('hex')
@@ -177,6 +180,7 @@ export class CreditAnalysisPlatform {
   private exports = new Map<Id, ExportArtifact>()
   private deletionJobs = new Map<Id, DeletionJob>()
   private reviewers = new Map<Id, Reviewer>()
+  private pilotApprovals = new Map<PilotApprovalArea, PilotApproval>()
   readonly auditEvents: AuditEvent[] = []
 
   register(input: { email: string; password: string }): { userId: Id; sessionId: Id } {
@@ -310,6 +314,19 @@ export class CreditAnalysisPlatform {
     return fallback()
   }
 
+  recordPilotApproval(input: { area: PilotApprovalArea; approver: string; evidenceReference: string }): PilotApproval {
+    if (!input.approver.trim() || !input.evidenceReference.trim()) throw new Error('Approval requires an accountable approver and evidence reference')
+    const approval = { ...input, approvedAt: now() }
+    this.pilotApprovals.set(input.area, approval)
+    this.audit('pilot-approval-recorded', input.approver, input.area, { evidenceReference: input.evidenceReference })
+    return structuredClone(approval)
+  }
+  getPilotGate(): PilotGate {
+    const required: PilotApprovalArea[] = ['product', 'legal', 'privacy', 'security', 'operations', 'accessibility', 'vendor']
+    const missing = required.filter(area => !this.pilotApprovals.has(area))
+    return { ready: missing.length === 0, missing, approvals: [...this.pilotApprovals.values()].map(item => structuredClone(item)) }
+  }
+  assertRealConsumerPilotReady(): void { const gate = this.getPilotGate(); if (!gate.ready) throw new Error(`Pilot approvals incomplete: ${gate.missing.join(', ')}`) }
   getAuditEvents(sessionId: Id): AuditEvent[] { const userId = this.requireSession(sessionId); return this.auditEvents.filter(event => event.actorId === userId).map(event => structuredClone(event)) }
   private requireSession(sessionId: Id): Id { const session = this.sessions.get(sessionId); if (!session || session.revokedAt) throw new Error('Authentication required'); return session.userId }
   private audit(type: string, actorId: Id, subjectId: Id, metadata: Record<string, string> = {}): void { this.auditEvents.push({ type, actorId, subjectId, at: now(), metadata }) }

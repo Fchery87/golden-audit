@@ -45,11 +45,6 @@ For each supported provider and storage adapter, demonstrate deletion of active 
 
 ## Required human approvals
 
-- [ ] Product owner confirms pilot scope, supported providers/templates, and success metrics.
-- [ ] Legal reviewer approves jurisdiction, authorities, limitations, and consumer wording.
-- [ ] Privacy owner approves collection, retention, deletion, subprocessors, and analytics dimensions.
-- [ ] Security owner approves threat model, vendors, access controls, encryption, and incident process.
-- [ ] Operations owner accepts monitoring, on-call, runbooks, rollback, and deletion drill evidence.
-- [ ] Accessibility reviewer accepts the recorded WCAG 2.2 AA evidence.
+The application exposes a fail-closed pilot gate for these approval areas: `product`, `legal`, `privacy`, `security`, `operations`, `accessibility`, and `vendor`. Each approval requires an accountable approver and an evidence reference; the real-consumer pilot cannot be marked ready until all seven are recorded.
 
-Until these checks are signed, the implementation is suitable for local and synthetic-data verification only, not a real-consumer launch.
+The approval record is an operational boundary, not a claim that an implementation agent can self-approve vendor or legal evidence. Until accountable owners record those approvals, the implementation is suitable for local and synthetic-data verification only, not a real-consumer launch.
