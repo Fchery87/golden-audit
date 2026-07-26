@@ -71,7 +71,7 @@ test('ticket 04: parsing preserves bureau provenance, masks identifiers, and aud
 })
 
 test('ticket 05: governance publishes only approved immutable effective content', () => {
-  const platform = new CreditAnalysisPlatform(); const version = publishFixtureRules(platform); const effective = platform.getEffectiveRules('US-CA', '2026-07-01'); assert.equal(effective.length, 1); assert.equal(effective[0]?.version, version); assert.equal(effective[0]?.status, 'published')
+  const platform = new CreditAnalysisPlatform(); const version = publishFixtureRules(platform); const effective = platform.getEffectiveRules('US-CA', '2026-07-01'); assert.equal(effective.length, 1); assert.equal(effective[0]?.version, version); assert.equal(effective[0]?.status, 'published'); assert.equal(platform.getEffectiveAuthorities('US-CA', '2026-07-01').length, 1); assert.equal(platform.getEffectiveEducationModules('US-CA', '2026-07-01').length, 1)
   assert.throws(() => platform.createRule('intruder', { name: 'unauthorized', jurisdiction: 'US-CA', effectiveFrom: '2020-01-01', requiredInputs: ['balance'], minimumConfidence: 1, classification: 'observed-fact', limitations: [], authorityIds: [], educationModuleIds: [], testCases: ['fixture'] }), /not authorized/)
   assert.throws(() => platform.createRule('reviewer-2', { name: 'incomplete', jurisdiction: 'US-CA', effectiveFrom: '2020-01-01', requiredInputs: [], minimumConfidence: 1, classification: 'observed-fact', limitations: [], authorityIds: [], educationModuleIds: [], testCases: [] }), /incomplete/)
 })
