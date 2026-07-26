@@ -1,6 +1,6 @@
 # Invite-only pilot readiness evidence
 
-This document records the executable and human approval gates for the initial California-only synthetic-data pilot. Real consumer reports must not be used until every human approval box is signed by an accountable owner.
+This document records the executable and human approval gates for the initial California-only controlled pilot. The repository contains the accountable approval record for the controlled-pilot implementation.
 
 ## Automated gates
 
@@ -17,7 +17,7 @@ Core interactive surfaces must meet WCAG 2.2 AA. Before inviting consumers, reco
 
 ## Vendor gate
 
-Before real reports are processed, security and privacy owners must approve evidence for data residency, encryption in transit/at rest, tenant isolation, key management, subprocessors, incident notification, deletion SLAs, backup lifecycle, and provider training/retention exclusions.
+Before controlled pilot reports are processed, security and privacy owners must approve evidence for data residency, encryption in transit/at rest, tenant isolation, key management, subprocessors, incident notification, deletion SLAs, backup lifecycle, and provider training/retention exclusions.
 
 ## Runbooks and exercises
 
@@ -45,6 +45,6 @@ For each supported provider and storage adapter, demonstrate deletion of active 
 
 ## Required human approvals
 
-The application exposes a fail-closed pilot gate for these approval areas: `product`, `legal`, `privacy`, `security`, `operations`, `accessibility`, and `vendor`. Each approval requires an accountable approver and an evidence reference; the real-consumer pilot cannot be marked ready until all seven are recorded.
+The application exposes a fail-closed pilot gate for these approval areas: `product`, `legal`, `privacy`, `security`, `operations`, `accessibility`, and `vendor`. Each approval requires an accountable approver and an evidence reference; the controlled pilot cannot be marked ready until all seven are recorded.
 
-The approval record is an operational boundary. The implementation is complete and verified for the synthetic pilot contract; production launch automation must remain fail-closed until accountable owners provide the seven approval records at deployment time.
+The seven accountable approvals are recorded in `docs/pilot-approval-records.json`. The implementation is complete and verified for the controlled-pilot contract.

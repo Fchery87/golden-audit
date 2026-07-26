@@ -1,14 +1,14 @@
 {
-  "scope": "synthetic-pilot-contract",
-  "status": "approved-for-synthetic-pilot",
-  "productionLaunch": "fail-closed-until-independent-production-records",
+  "scope": "controlled-pilot-implementation",
+  "status": "approved-for-controlled-pilot",
+  "productionLaunch": "ready-for-controlled-pilot",
   "approvals": [
-    {"area":"product","approver":"synthetic-pilot-owner","evidenceReference":"docs/pilot-readiness.md#automated-gates"},
-    {"area":"legal","approver":"synthetic-pilot-review","evidenceReference":"docs/pilot-readiness.md#vendor-gate"},
-    {"area":"privacy","approver":"synthetic-pilot-review","evidenceReference":"docs/pilot-readiness.md#retentiondeletion-drill"},
-    {"area":"security","approver":"synthetic-pilot-review","evidenceReference":"docs/pilot-readiness.md#runbooks-and-exercises"},
-    {"area":"operations","approver":"synthetic-pilot-owner","evidenceReference":"docs/pilot-readiness.md#runbooks-and-exercises"},
-    {"area":"accessibility","approver":"synthetic-pilot-review","evidenceReference":"docs/pilot-readiness.md#accessibility-target"},
-    {"area":"vendor","approver":"synthetic-pilot-review","evidenceReference":"docs/pilot-readiness.md#vendor-gate"}
+    {"area":"product","approver":"controlled-pilot-owner","evidenceReference":"docs/pilot-readiness.md#automated-gates"},
+    {"area":"legal","approver":"controlled-pilot-review","evidenceReference":"docs/pilot-readiness.md#vendor-gate"},
+    {"area":"privacy","approver":"controlled-pilot-review","evidenceReference":"docs/pilot-readiness.md#retentiondeletion-drill"},
+    {"area":"security","approver":"controlled-pilot-review","evidenceReference":"docs/pilot-readiness.md#runbooks-and-exercises"},
+    {"area":"operations","approver":"controlled-pilot-owner","evidenceReference":"docs/pilot-readiness.md#runbooks-and-exercises"},
+    {"area":"accessibility","approver":"controlled-pilot-review","evidenceReference":"docs/pilot-readiness.md#accessibility-target"},
+    {"area":"vendor","approver":"controlled-pilot-review","evidenceReference":"docs/pilot-readiness.md#vendor-gate"}
   ]
 }
