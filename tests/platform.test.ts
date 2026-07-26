@@ -27,13 +27,16 @@ function uploadAndParse(platform: CreditAnalysisPlatform, sessionId: string, wor
 }
 
 function publishFixtureRules(platform: CreditAnalysisPlatform) {
-  const authority = platform.createAuthority({ citation: '15 USC 1681', jurisdiction: 'US-CA', effectiveFrom: '2020-01-01', permittedUse: 'education', limitations: ['A consumer report alone may not establish a legal violation'] })
-  const module = platform.createEducationModule({ title: 'Balance timing', body: 'Bureaus can update on different dates.', jurisdiction: 'US-CA', effectiveFrom: '2020-01-01', permittedUse: 'education', limitations: ['Verify current information directly'] })
+  platform.registerReviewer({ id: 'reviewer-1', role: 'compliance-reviewer' })
+  platform.registerReviewer({ id: 'reviewer-2', role: 'engineering-reviewer' })
+  platform.registerReviewer({ id: 'release-1', role: 'release-manager' })
+  const authority = platform.createAuthority('reviewer-1', { citation: '15 USC 1681', jurisdiction: 'US-CA', effectiveFrom: '2020-01-01', permittedUse: 'education', limitations: ['A consumer report alone may not establish a legal violation'] })
+  const module = platform.createEducationModule('reviewer-1', { title: 'Balance timing', body: 'Bureaus can update on different dates.', jurisdiction: 'US-CA', effectiveFrom: '2020-01-01', permittedUse: 'education', limitations: ['Verify current information directly'] })
   platform.reviewGovernance('authority', authority.id, 'reviewer-1', 'approved', 'Counsel-approved pilot source')
   platform.reviewGovernance('module', module.id, 'reviewer-1', 'approved', 'Approved educational wording')
-  const rule = platform.createRule({ name: 'cross-bureau-balance-difference', jurisdiction: 'US-CA', effectiveFrom: '2020-01-01', requiredInputs: ['balance', 'updated'], minimumConfidence: 0.9, classification: 'verification-recommended', limitations: ['Different update dates can explain a difference'], authorityIds: [authority.id], educationModuleIds: [module.id], testCases: ['balance-difference'] })
+  const rule = platform.createRule('reviewer-2', { name: 'cross-bureau-balance-difference', jurisdiction: 'US-CA', effectiveFrom: '2020-01-01', requiredInputs: ['balance', 'updated'], minimumConfidence: 0.9, classification: 'verification-recommended', limitations: ['Different update dates can explain a difference'], authorityIds: [authority.id], educationModuleIds: [module.id], testCases: ['balance-difference'] })
   platform.reviewGovernance('rule', rule.id, 'reviewer-2', 'approved', 'Fixture passes')
-  return platform.publishRuleset('US-CA', '2026-07-01')
+  return platform.publishRuleset('release-1', 'US-CA', '2026-07-01')
 }
 
 test('ticket 02: account consent gate, session revocation, and tenant isolation fail closed', () => {
@@ -69,7 +72,8 @@ test('ticket 04: parsing preserves bureau provenance, masks identifiers, and aud
 
 test('ticket 05: governance publishes only approved immutable effective content', () => {
   const platform = new CreditAnalysisPlatform(); const version = publishFixtureRules(platform); const effective = platform.getEffectiveRules('US-CA', '2026-07-01'); assert.equal(effective.length, 1); assert.equal(effective[0]?.version, version); assert.equal(effective[0]?.status, 'published')
-  assert.throws(() => platform.createRule({ name: 'incomplete', jurisdiction: 'US-CA', effectiveFrom: '2020-01-01', requiredInputs: [], minimumConfidence: 1, classification: 'observed-fact', limitations: [], authorityIds: [], educationModuleIds: [], testCases: [] }), /incomplete/)
+  assert.throws(() => platform.createRule('intruder', { name: 'unauthorized', jurisdiction: 'US-CA', effectiveFrom: '2020-01-01', requiredInputs: ['balance'], minimumConfidence: 1, classification: 'observed-fact', limitations: [], authorityIds: [], educationModuleIds: [], testCases: ['fixture'] }), /not authorized/)
+  assert.throws(() => platform.createRule('reviewer-2', { name: 'incomplete', jurisdiction: 'US-CA', effectiveFrom: '2020-01-01', requiredInputs: [], minimumConfidence: 1, classification: 'observed-fact', limitations: [], authorityIds: [], educationModuleIds: [], testCases: [] }), /incomplete/)
 })
 
 test('tickets 06-08: confirmed matching drives deterministic findings and user-controlled report actions', () => {
