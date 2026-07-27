@@ -4,7 +4,7 @@
 
 **Blocked by:** 05 — Governed rules and educational-content publication; 07 — Deterministic evidence-linked analysis; 08 — Interactive report and user-controlled action workspace.
 
-**Status:** resolved
+**Status:** prototype-implemented
 
 - [x] The language-generation boundary accepts only validated structured findings, confirmed user context, and approved educational/authority records.
 - [x] Retrieval filters content by approval status, jurisdiction, effective dates, permitted use, and citation metadata.
@@ -20,3 +20,5 @@
 ## Verification
 
 Covered by the ticket-specific tests and the complete `npm run verify:pilot` gate. Human launch approvals remain explicitly gated in `docs/pilot-readiness.md`.
+
+Prototype-implemented only (in-memory, no real DB/ingestion/UI). Not production-resolved.

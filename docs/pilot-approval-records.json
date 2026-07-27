@@ -1,14 +1,15 @@
 {
-  "scope": "controlled-pilot-implementation",
-  "status": "approved-for-controlled-pilot",
-  "productionLaunch": "ready-for-controlled-pilot",
+  "_warning": "TEST FIXTURE ONLY — NOT APPROVALS. These records exist solely to exercise the fail-closed pilot gate in tests/pilot-readiness.test.ts. They confer no real product/legal/privacy/security/operations/accessibility/vendor approval. Real approvals must be recorded by accountable human owners (see ADR-0001 and docs/legal-pre-mortem-brief.md).",
+  "scope": "test-fixture-only",
+  "status": "fixture-not-an-approval",
+  "productionLaunch": "not-authorized-fixtures-only",
   "approvals": [
-    {"area":"product","approver":"controlled-pilot-owner","evidenceReference":"docs/pilot-readiness.md#automated-gates"},
-    {"area":"legal","approver":"controlled-pilot-review","evidenceReference":"docs/pilot-readiness.md#vendor-gate"},
-    {"area":"privacy","approver":"controlled-pilot-review","evidenceReference":"docs/pilot-readiness.md#retentiondeletion-drill"},
-    {"area":"security","approver":"controlled-pilot-review","evidenceReference":"docs/pilot-readiness.md#runbooks-and-exercises"},
-    {"area":"operations","approver":"controlled-pilot-owner","evidenceReference":"docs/pilot-readiness.md#runbooks-and-exercises"},
-    {"area":"accessibility","approver":"controlled-pilot-review","evidenceReference":"docs/pilot-readiness.md#accessibility-target"},
-    {"area":"vendor","approver":"controlled-pilot-review","evidenceReference":"docs/pilot-readiness.md#vendor-gate"}
+    {"area":"product","approver":"fixture:product","evidenceReference":"fixture — not a real approval"},
+    {"area":"legal","approver":"fixture:legal","evidenceReference":"fixture — not a real approval"},
+    {"area":"privacy","approver":"fixture:privacy","evidenceReference":"fixture — not a real approval"},
+    {"area":"security","approver":"fixture:security","evidenceReference":"fixture — not a real approval"},
+    {"area":"operations","approver":"fixture:operations","evidenceReference":"fixture — not a real approval"},
+    {"area":"accessibility","approver":"fixture:accessibility","evidenceReference":"fixture — not a real approval"},
+    {"area":"vendor","approver":"fixture:vendor","evidenceReference":"fixture — not a real approval"}
   ]
 }

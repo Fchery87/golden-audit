@@ -4,7 +4,7 @@
 
 **Blocked by:** 03 — Private upload and safe ingestion lifecycle; 08 — Interactive report and user-controlled action workspace.
 
-**Status:** resolved
+**Status:** prototype-implemented
 
 - [x] An explicit consumer request generates an export from validated structured report content rather than a screenshot or stale UI rendering.
 - [x] The export includes generation date, report scope, ruleset version, source references, limitations, and educational disclaimer.
@@ -19,3 +19,5 @@
 ## Verification
 
 Covered by the ticket-specific tests and the complete `npm run verify:pilot` gate. Human launch approvals remain explicitly gated in `docs/pilot-readiness.md`.
+
+Prototype-implemented only (in-memory, no real DB/ingestion/UI). Not production-resolved.

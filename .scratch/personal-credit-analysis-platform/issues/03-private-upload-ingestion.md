@@ -4,7 +4,7 @@
 
 **Blocked by:** 02 — Secure account, consent, and jurisdiction gate.
 
-**Status:** resolved
+**Status:** prototype-implemented
 
 - [x] An eligible consumer can initialize and complete an upload for a supported native PDF or static HTML report.
 - [x] Uploads use private storage and short-lived signed access; persistent public document URLs are not exposed.
@@ -19,3 +19,5 @@
 ## Verification
 
 Covered by the ticket-specific tests and the complete `npm run verify:pilot` gate. Human launch approvals remain explicitly gated in `docs/pilot-readiness.md`.
+
+Prototype-implemented only (in-memory, no real DB/ingestion/UI). Not production-resolved.

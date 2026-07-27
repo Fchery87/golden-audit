@@ -4,7 +4,7 @@
 
 **Blocked by:** 05 — Governed rules and educational-content publication; 06 — Cross-bureau account matching and confirmation.
 
-**Status:** resolved
+**Status:** prototype-implemented
 
 - [x] A consumer can start an analysis only after required report review and matching confirmation are complete.
 - [x] Each analysis records immutable normalized-input, user-fact, ruleset, jurisdiction, parser, and application versions.
@@ -20,3 +20,5 @@
 ## Verification
 
 Covered by the ticket-specific tests and the complete `npm run verify:pilot` gate. Human launch approvals remain explicitly gated in `docs/pilot-readiness.md`.
+
+Prototype-implemented only (in-memory, no real DB/ingestion/UI). Not production-resolved.

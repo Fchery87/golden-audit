@@ -4,7 +4,7 @@
 
 **Blocked by:** 03 — Private upload and safe ingestion lifecycle.
 
-**Status:** resolved
+**Status:** prototype-implemented
 
 - [x] A supported provider/template is routed to a versioned parser adapter, while unsupported layouts are flagged rather than guessed.
 - [x] Parsed report metadata, identity fragments, addresses, employers, tradelines, collections, inquiries, public records, scores, and remarks validate against a canonical schema.
@@ -20,3 +20,5 @@
 ## Verification
 
 Covered by the ticket-specific tests and the complete `npm run verify:pilot` gate. Human launch approvals remain explicitly gated in `docs/pilot-readiness.md`.
+
+Prototype-implemented only (in-memory, no real DB/ingestion/UI). Not production-resolved.

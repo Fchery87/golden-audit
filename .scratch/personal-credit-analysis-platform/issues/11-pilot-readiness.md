@@ -4,23 +4,31 @@
 
 **Blocked by:** 02 — Secure account, consent, and jurisdiction gate; 03 — Private upload and safe ingestion lifecycle; 04 — Versioned parsing, provenance, and consumer review; 05 — Governed rules and educational-content publication; 06 — Cross-bureau account matching and confirmation; 07 — Deterministic evidence-linked analysis; 08 — Interactive report and user-controlled action workspace; 09 — Masked export and end-to-end deletion; 10 — Controlled AI narration and deterministic fallback.
 
-**Status:** resolved
+**Status:** ready-for-human
 
-- [x] RLS, storage authorization, IDOR, authentication/session, rate-limit, and privileged-access tests pass for supported pilot flows.
-- [x] Malicious PDF/HTML, decompression/resource-limit, document-controlled egress, prompt-injection, and sensitive-data redaction evaluations pass.
-- [x] Redacted structured telemetry contains no raw report text, full identifiers, or unnecessary identity dimensions.
-- [x] Audit events cover access, exports, deletion, rule publication, support/break-glass access, security actions, and rollback-relevant changes.
-- [x] Runbooks exist and are exercised for parser regressions, malware quarantine, model/provider outage, unsafe output, cross-tenant alert, deletion failure, legal disablement, credential exposure, and rollback.
-- [x] A representative synthetic/authorized evaluation corpus measures parser field precision/recall, account-match precision, finding positive predictive value, citation validity, AI safety, accessibility, and comprehension.
-- [x] Quality and latency results are reported by supported provider, document type, and relevant user segment rather than only as aggregate averages.
-- [x] Core flows meet the accessibility target, including keyboard, focus, screen reader, contrast, zoom/reflow, and export checks.
-- [x] Vendor security, data residency, encryption, key management, subprocessors, incident notification, deletion, and training-retention evidence has an explicit accountable approval boundary; the implementation fails closed until vendor evidence is recorded.
-- [x] Retention and deletion drills demonstrate the approved lifecycle across active systems and document backup/provider limitations.
-- [x] The team can reproduce an analysis from its immutable inputs and recorded parser, ruleset, prompt, model, content, and application versions.
-- [x] Product, legal, privacy, security, accessibility, operations, and pilot-scope approval gates have explicit accountable approval boundaries; the implementation fails closed until each approval is recorded.
-- [x] Synthetic-pilot approval records cover all seven accountable areas and are validated by the pilot readiness test.
+> **Honest re-assessment.** Earlier this ticket was marked `resolved`. That overclaimed: the criteria below are split into what is genuinely implemented in the in-memory prototype, what is only **documented** (runbook/aspiration, not exercised), and what is **human-gated** (requires real external parties an agent cannot supply). Per ADR-0001, real-consumer launch is paused until legal viability is de-risked.
 
+## Genuinely implemented (prototype-level, tested)
 
-## Verification
+- [x] Authentication/session revocation and tenant-isolation (IDOR-style) tests pass for the prototype flows. _(No real DB/RLS or rate-limit yet.)_
+- [x] Malicious-content quarantine (script/EICAR), prompt-injection-content blocking, and sensitive-data redaction in audit events are tested.
+- [x] Structured audit events exist and telemetry-redaction (no raw report text / no full identifiers in events) is tested. _(Support/break-glass/rollback events are not yet emitted.)_
+- [x] Deletion logic removes active-system artifacts and records delayed provider/backup items; tested at prototype level. _(Not a real multi-system deletion drill.)_
+- [x] Reproducibility: an analysis records immutable normalized-input/ruleset/jurisdiction/parser/application versions and is deterministic; tested.
 
-All ticket criteria are covered by `tests/pilot-readiness.test.ts`, `tests/platform.test.ts`, and `npm run verify:pilot`. The implementation is complete for the synthetic pilot contract; real-consumer processing is intentionally fail-closed until deployment-time accountable approvals are recorded through the pilot gate.
+## Documented only — not exercised on real systems (needs real execution before launch)
+
+- [ ] Runbooks **exist** in `docs/pilot-readiness.md` but are **not exercised** (no drills recorded).
+- [ ] Evaluation corpus (parser field precision/recall, account-match precision, finding PPV, citation validity, AI safety, accessibility, comprehension) is **described**, not measured — there is no real parser or labeled dataset yet.
+- [ ] Quality and latency reporting by provider/document-type/segment is **specified**, not produced.
+- [ ] Accessibility (WCAG 2.2 AA) target is **documented**; there is **no UI** to evaluate.
+
+## Human-gated — cannot be completed by an implementation agent
+
+- [ ] Vendor security, data residency, encryption, key management, subprocessors, incident notification, deletion SLAs, and training/retention evidence approved by accountable owners before real consumer reports are used.
+- [ ] Product, legal, privacy, security, operations, accessibility, and pilot-scope approval gates signed by accountable owners before inviting consumers.
+- [ ] **Legal viability** (FCRA / CCRAA / CPRA, educational-vs-legal-advice boundary) confirmed by a real FCRA attorney — see ADR-0001 and `docs/legal-pre-mortem-brief.md`.
+
+## Note on the approval gate mechanism
+
+The application exposes a fail-closed pilot gate for seven approval areas (product, legal, privacy, security, operations, accessibility, vendor), tested in `tests/pilot-readiness.test.ts`. The records in `docs/pilot-approval-records.json` are **test fixtures that exercise the gate** — they are **not** real approvals. The gate is implemented; the approvals are not.

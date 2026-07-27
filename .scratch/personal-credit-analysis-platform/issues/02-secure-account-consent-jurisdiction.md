@@ -4,7 +4,7 @@
 
 **Blocked by:** 01 — Application foundation and deployable workspace.
 
-**Status:** resolved
+**Status:** prototype-implemented
 
 - [x] A consumer can register, sign in, sign out, and access only their own workspace.
 - [x] The product records adult U.S. scope, report ownership or lawful authorization, educational limitations, sensitive-data handling acknowledgement, residence, and analysis jurisdiction with consent version and timestamp.
@@ -15,4 +15,4 @@
 
 ## Verification
 
-Covered by `tests/platform.test.ts` and the full `npm run verify:pilot` gate.
+Prototype-implemented and covered by `tests/platform.test.ts` / `tests/foundation.test.ts` (in-memory, no real DB/ingestion/UI). Not production-resolved; real infra, security, and the legal de-risk (ADR-0001) are required before this is live.

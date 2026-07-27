@@ -4,7 +4,7 @@
 
 **Blocked by:** 07 — Deterministic evidence-linked analysis.
 
-**Status:** resolved
+**Status:** prototype-implemented
 
 - [x] The report displays scope, supported bureaus/providers, report dates, jurisdiction, processing quality, unsupported sections, and product limitations.
 - [x] The report displays an overview of account categories, open/closed counts, collections, inquiries, valid utilization data, and displayed score/model information without predicting outcomes.
@@ -21,3 +21,5 @@
 ## Verification
 
 Covered by the ticket-specific tests and the complete `npm run verify:pilot` gate. Human launch approvals remain explicitly gated in `docs/pilot-readiness.md`.
+
+Prototype-implemented only (in-memory, no real DB/ingestion/UI). Not production-resolved.

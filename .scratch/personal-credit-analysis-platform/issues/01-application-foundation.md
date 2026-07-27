@@ -4,7 +4,7 @@
 
 **Blocked by:** None — can start immediately.
 
-**Status:** resolved
+**Status:** prototype-implemented
 
 - [x] A consumer web application, durable processing worker, and administration application can be installed, started, and built through the project toolchain.
 - [x] Shared domain and validation packages can be imported by the applications without duplicating core types.
@@ -13,7 +13,6 @@
 - [x] Tests run in a clean environment and fail clearly when the foundation is broken.
 - [x] The workspace has documented local development and validation commands without inventing unverified production guarantees.
 
-
 ## Verification
 
-Covered by `tests/foundation.test.ts` and the complete `npm run verify:pilot` gate.
+Prototype-implemented and covered by `tests/platform.test.ts` / `tests/foundation.test.ts` (in-memory, no real DB/ingestion/UI). Not production-resolved; real infra, security, and the legal de-risk (ADR-0001) are required before this is live.

@@ -4,7 +4,7 @@
 
 **Blocked by:** 04 — Versioned parsing, provenance, and consumer review.
 
-**Status:** resolved
+**Status:** prototype-implemented
 
 - [x] The system proposes probable account match groups using masked account signals, creditor identity, account type, dates, balances, and other approved signals.
 - [x] Each proposed match exposes confidence and the signals contributing to the proposal.
@@ -19,3 +19,5 @@
 ## Verification
 
 Covered by the ticket-specific tests and the complete `npm run verify:pilot` gate. Human launch approvals remain explicitly gated in `docs/pilot-readiness.md`.
+
+Prototype-implemented only (in-memory, no real DB/ingestion/UI). Not production-resolved.

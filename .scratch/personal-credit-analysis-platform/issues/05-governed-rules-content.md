@@ -4,7 +4,7 @@
 
 **Blocked by:** 01 — Application foundation and deployable workspace.
 
-**Status:** resolved
+**Status:** prototype-implemented
 
 - [x] Authorized reviewers can create draft rules, authority records, and educational modules with jurisdiction, effective dates, limitations, approval state, and permitted-use metadata.
 - [x] A rule contract requires declared inputs, minimum confidence, classification, limitations, authority/module references, and test-case references.
@@ -18,3 +18,5 @@
 ## Verification
 
 Covered by the ticket-specific tests and the complete `npm run verify:pilot` gate. Human launch approvals remain explicitly gated in `docs/pilot-readiness.md`.
+
+Prototype-implemented only (in-memory, no real DB/ingestion/UI). Not production-resolved.

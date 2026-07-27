@@ -1,11 +1,13 @@
 import { createHash, randomBytes, randomUUID, scryptSync, timingSafeEqual } from 'node:crypto'
 import { applicationVersion } from '../../domain/src/index.js'
+import { evaluateAnalysis, SEVERITY_RANK } from '../../analysis-core/src/index.js'
+import type { Analysis as CoreAnalysis, Finding, FindingClassification, RuleAudit, SourceReference } from '../../analysis-core/src/index.js'
 
+export type { Finding, FindingClassification, RuleAudit, SourceReference }
 export type Id = string
 export type Jurisdiction = 'US-CA'
 export type Bureau = 'equifax' | 'experian' | 'transunion'
 export type ReviewDecision = 'confirmed' | 'corrected' | 'unknown' | 'not-shown'
-export type FindingClassification = 'observed-fact' | 'inconsistency' | 'potential-error' | 'verification-recommended' | 'potential-compliance-concern' | 'insufficient-information' | 'educational-opportunity'
 
 export type Consent = {
   version: string
@@ -41,7 +43,7 @@ export type Upload = {
   completedAt?: string
 }
 
-export type SourceReference = { kind: 'page' | 'element'; locator: string; snippet: string }
+// SourceReference is imported from analysis-core (see imports above) and re-exported.
 export type CanonicalValue<T> = {
   id: Id
   bureau: Bureau
@@ -123,29 +125,9 @@ export type MatchGroup = {
   history: Array<{ action: MatchGroup['state']; actorId: Id; at: string; reason: string }>
 }
 
-export type Finding = {
-  id: Id
-  classification: FindingClassification
-  title: string
-  severity: 'low' | 'medium' | 'high'
-  confidence: number
-  evidence: Array<{ tradelineId: Id; field: string; value: string | number; source: SourceReference }>
-  limitations: string[]
-  alternativeExplanations: string[]
-  verificationDocuments: string[]
-  authorityIds: Id[]
-  educationModuleIds: Id[]
-  suggestedAction: string
-}
-export type Analysis = {
-  id: Id
-  userId: Id
-  reportId: Id
-  versions: { normalizedInput: number; ruleset: string; jurisdiction: Jurisdiction; parser: string; application: string }
-  findings: Finding[]
-  audit: Array<{ ruleId: Id; outcome: 'triggered' | 'skipped' | 'suppressed'; reason: string }>
-  createdAt: string
-}
+// Finding is imported from analysis-core and re-exported. Analysis is the ingest-agnostic
+// core analysis plus the host's ownership fields (userId, reportId).
+export type Analysis = CoreAnalysis & { userId: Id; reportId: Id }
 
 type ActionItem = { id: Id; findingId: Id; status: 'unresolved' | 'recognized' | 'dismissed' | 'under-review' | 'complete'; note?: string; reason?: string; documents: string[] }
 export type ConsumerReport = { id: Id; userId: Id; analysisId: Id; limitations: string[]; overview: Record<string, number>; findings: Finding[]; actions: ActionItem[]; generatedAt: string }
@@ -281,11 +263,11 @@ export class CreditAnalysisPlatform {
   proposeMatches(sessionId: Id, reportId: Id): MatchGroup[] { const userId = this.requireSession(sessionId); const report = this.reports.get(reportId); if (!report || report.userId !== userId) throw new Error('Not found'); const grouped = new Map<string, Tradeline[]>(); for (const line of report.tradelines) { const key = `${line.creditor.normalized?.toLowerCase()}:${line.maskedAccount.normalized}`; grouped.set(key, [...(grouped.get(key) ?? []), line]) } const result: MatchGroup[] = []; for (const lines of grouped.values()) { if (lines.length < 2) continue; const balanceAgreement = new Set(lines.map(line => line.balance.normalized)).size === 1; const confidence = balanceAgreement ? 0.95 : 0.72; const group: MatchGroup = { id: randomUUID(), reportId, tradelineIds: lines.map(line => line.id), confidence, signals: ['creditor', 'masked-account', ...(balanceAgreement ? ['balance'] : [])], state: confidence >= 0.9 ? 'proposed' : 'split', history: [] }; this.matches.set(group.id, group); result.push(group) } return structuredClone(result) }
   decideMatch(sessionId: Id, matchId: Id, action: 'confirmed' | 'rejected' | 'split' | 'merged', reason: string): MatchGroup { const userId = this.requireSession(sessionId); const match = this.matches.get(matchId); const report = match && this.reports.get(match.reportId); if (!match || !report || report.userId !== userId) throw new Error('Not found'); match.state = action; match.history.push({ action, actorId: userId, at: now(), reason }); this.audit('match-decision', userId, match.id, { action }); return structuredClone(match) }
 
-  runAnalysis(sessionId: Id, reportId: Id, rulesetVersion: string, jurisdiction: Jurisdiction): Analysis { const userId = this.requireSession(sessionId); const report = this.reports.get(reportId); if (!report || report.userId !== userId) throw new Error('Not found'); if (!report.reviewComplete) throw new Error('Report review is incomplete'); const unresolvedMatches = [...this.matches.values()].filter(match => match.reportId === reportId && match.state === 'proposed'); if (unresolvedMatches.length) throw new Error('Account matching confirmation is incomplete'); const rules = this.publishedRulesets.get(rulesetVersion); if (!rules) throw new Error('Ruleset not found'); const findings: Finding[] = []; const audit: Analysis['audit'] = []
-    for (const rule of rules) { if (rule.status === 'disabled') { audit.push({ ruleId: rule.id, outcome: 'skipped', reason: 'Rule disabled' }); continue } if (rule.name === 'cross-bureau-balance-difference') { for (const match of [...this.matches.values()].filter(item => item.reportId === reportId && item.state === 'confirmed')) { const lines = report.tradelines.filter(line => match.tradelineIds.includes(line.id)); if (lines.some(line => line.balance.confidence < rule.minimumConfidence || line.balance.normalized === null)) { audit.push({ ruleId: rule.id, outcome: 'suppressed', reason: 'Missing or low-confidence balance' }); continue } const balances = new Set(lines.map(line => line.balance.normalized)); if (balances.size > 1) { const evidence = lines.map(line => ({ tradelineId: line.id, field: 'balance', value: line.balance.normalized ?? 0, source: line.balance.source })); const signature = JSON.stringify(evidence.map(item => [item.tradelineId, item.value]).sort()); if (!findings.some(item => JSON.stringify(item.evidence.map(e => [e.tradelineId, e.value]).sort()) === signature)) findings.push({ id: randomUUID(), classification: rule.classification, title: 'Bureau balances differ', severity: 'medium', confidence: Math.min(...lines.map(line => line.balance.confidence)), evidence, limitations: rule.limitations, alternativeExplanations: ['Bureaus may have received updates on different dates'], verificationDocuments: ['Recent creditor statement'], authorityIds: rule.authorityIds, educationModuleIds: rule.educationModuleIds, suggestedAction: 'Compare the displayed dates and verify the current balance with the creditor' }); audit.push({ ruleId: rule.id, outcome: 'triggered', reason: 'Comparable balances differ' }) } else audit.push({ ruleId: rule.id, outcome: 'skipped', reason: 'Comparable balances agree' }) } } else audit.push({ ruleId: rule.id, outcome: 'skipped', reason: 'No supported evaluator for this rule' }) }
-    const analysis: Analysis = { id: randomUUID(), userId, reportId, versions: { normalizedInput: report.normalizedVersion, ruleset: rulesetVersion, jurisdiction, parser: report.parserVersion, application: applicationVersion }, findings, audit, createdAt: now() }; this.analyses.set(analysis.id, analysis); this.audit('analysis-created', userId, analysis.id, { rulesetVersion }); return structuredClone(analysis) }
+  runAnalysis(sessionId: Id, reportId: Id, rulesetVersion: string, jurisdiction: Jurisdiction): Analysis { const userId = this.requireSession(sessionId); const report = this.reports.get(reportId); if (!report || report.userId !== userId) throw new Error('Not found'); if (!report.reviewComplete) throw new Error('Report review is incomplete'); const unresolvedMatches = [...this.matches.values()].filter(match => match.reportId === reportId && match.state === 'proposed'); if (unresolvedMatches.length) throw new Error('Account matching confirmation is incomplete'); const rules = this.publishedRulesets.get(rulesetVersion); if (!rules) throw new Error('Ruleset not found')
+    const core = evaluateAnalysis({ rules, tradelines: report.tradelines, confirmedMatches: [...this.matches.values()].filter(match => match.reportId === reportId && match.state === 'confirmed').map(match => ({ tradelineIds: match.tradelineIds })), versions: { normalizedInput: report.normalizedVersion, ruleset: rulesetVersion, jurisdiction, parser: report.parserVersion, application: applicationVersion } })
+    const analysis: Analysis = { ...core, userId, reportId }; this.analyses.set(analysis.id, analysis); this.audit('analysis-created', userId, analysis.id, { rulesetVersion }); return structuredClone(analysis) }
 
-  createConsumerReport(sessionId: Id, analysisId: Id): ConsumerReport { const userId = this.requireSession(sessionId); const analysis = this.analyses.get(analysisId); if (!analysis || analysis.userId !== userId) throw new Error('Not found'); const report = this.reports.get(analysis.reportId); if (!report) throw new Error('Not found'); const consumerReport: ConsumerReport = { id: randomUUID(), userId, analysisId, limitations: ['Educational information only', 'No legal verdict, deletion promise, or score guarantee'], overview: { tradelines: report.tradelines.length, collections: report.collections.length, inquiries: report.inquiries.length, openAccounts: report.tradelines.filter(line => line.status.normalized?.toLowerCase().includes('open')).length }, findings: [...analysis.findings].sort((a, b) => severityRank(b.severity) - severityRank(a.severity) || b.confidence - a.confidence), actions: analysis.findings.map(finding => ({ id: randomUUID(), findingId: finding.id, status: 'unresolved', documents: [] })), generatedAt: now() }; this.consumerReports.set(consumerReport.id, consumerReport); return structuredClone(consumerReport) }
+  createConsumerReport(sessionId: Id, analysisId: Id): ConsumerReport { const userId = this.requireSession(sessionId); const analysis = this.analyses.get(analysisId); if (!analysis || analysis.userId !== userId) throw new Error('Not found'); const report = this.reports.get(analysis.reportId); if (!report) throw new Error('Not found'); const consumerReport: ConsumerReport = { id: randomUUID(), userId, analysisId, limitations: ['Educational information only', 'No legal verdict, deletion promise, or score guarantee'], overview: { tradelines: report.tradelines.length, collections: report.collections.length, inquiries: report.inquiries.length, openAccounts: report.tradelines.filter(line => line.status.normalized?.toLowerCase().includes('open')).length }, findings: [...analysis.findings].sort((a, b) => SEVERITY_RANK[b.severity] - SEVERITY_RANK[a.severity] || b.confidence - a.confidence), actions: analysis.findings.map(finding => ({ id: randomUUID(), findingId: finding.id, status: 'unresolved', documents: [] })), generatedAt: now() }; this.consumerReports.set(consumerReport.id, consumerReport); return structuredClone(consumerReport) }
   updateAction(sessionId: Id, consumerReportId: Id, actionId: Id, patch: Partial<Pick<ActionItem, 'status' | 'note' | 'reason' | 'documents'>>): ActionItem { const userId = this.requireSession(sessionId); const report = this.consumerReports.get(consumerReportId); if (!report || report.userId !== userId) throw new Error('Not found'); const action = report.actions.find(item => item.id === actionId); if (!action) throw new Error('Action not found'); Object.assign(action, patch); this.audit('action-updated', userId, action.id, { status: action.status }); return structuredClone(action) }
 
   createExport(sessionId: Id, consumerReportId: Id): ExportArtifact { const userId = this.requireSession(sessionId); const report = this.consumerReports.get(consumerReportId); if (!report || report.userId !== userId) throw new Error('Not found'); const existing = [...this.exports.values()].find(item => item.userId === userId && item.reportId === consumerReportId); if (existing) return structuredClone(existing); const analysis = this.analyses.get(report.analysisId); const content = JSON.stringify({ generatedAt: now(), scope: 'Validated personal credit analysis', rulesetVersion: analysis?.versions.ruleset, limitations: report.limitations, disclaimer: 'Educational information only; no guaranteed outcome.', findings: report.findings.map(finding => ({ ...finding, evidence: finding.evidence.map(evidence => ({ ...evidence, value: typeof evidence.value === 'string' && /\d{5,}/.test(evidence.value) ? maskAccount(evidence.value) : evidence.value })) })) }, null, 2); const artifact = { id: randomUUID(), userId, reportId: consumerReportId, content, createdAt: now() }; this.exports.set(artifact.id, artifact); this.audit('export-created', userId, artifact.id); return structuredClone(artifact) }
@@ -335,5 +317,5 @@ export class CreditAnalysisPlatform {
 type ParserInput = { provider: string; template: string; reportDate: string; identity: string[]; addresses: string[]; employers: string[]; inquiries: string[]; publicRecords: string[]; scores: number[]; remarks: string[]; tradelines: Array<{ bureau: Bureau; creditor: string; account: string; accountType: string; balance: number; status: string; opened: string; updated: string; confidence?: number }> }
 function isParserInput(value: unknown): value is ParserInput { if (!value || typeof value !== 'object') return false; const item = value as Record<string, unknown>; return typeof item.provider === 'string' && typeof item.template === 'string' && typeof item.reportDate === 'string' && ['identity', 'addresses', 'employers', 'inquiries', 'publicRecords', 'scores', 'remarks', 'tradelines'].every(key => Array.isArray(item[key])) }
 function allValues(report: CanonicalReport): CanonicalValue<unknown>[] { const direct: CanonicalValue<unknown>[] = [...report.identity, ...report.addresses, ...report.employers, ...report.inquiries, ...report.publicRecords, ...report.scores, ...report.remarks]; for (const line of [...report.tradelines, ...report.collections]) direct.push(line.creditor, line.maskedAccount, line.accountType, line.balance, line.status, line.opened, line.updated); return direct }
-function severityRank(value: Finding['severity']): number { return value === 'high' ? 3 : value === 'medium' ? 2 : 1 }
+// severityRank removed — the engine's SEVERITY_RANK (imported) is used directly.
 function validateNarration(text: string, analysis: Analysis): boolean { if (!text.trim() || /guarantee|will be deleted|illegal|violation|\b\d{9}\b|ignore previous|system prompt/i.test(text)) return false; return analysis.findings.every(finding => text.includes(finding.title) && finding.limitations.every(limitation => text.includes(limitation))) }
