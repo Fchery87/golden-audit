@@ -1,6 +1,7 @@
 import { createHash, randomBytes, randomUUID, scryptSync, timingSafeEqual } from 'node:crypto'
 import { applicationVersion } from '../../domain/src/index.js'
 import { evaluateAnalysis, SEVERITY_RANK } from '../../analysis-core/src/index.js'
+import { redactReportText } from '../../redaction/src/index.js'
 import type { Analysis as CoreAnalysis, Finding, FindingClassification, RuleAudit, SourceReference } from '../../analysis-core/src/index.js'
 
 export type { Finding, FindingClassification, RuleAudit, SourceReference }
@@ -39,6 +40,7 @@ export type Upload = {
   retentionClass?: 'consumer-report'
   stage: UploadStage
   sanitizedContent?: string
+  redactionCount?: number
   failureMessage?: string
   completedAt?: string
 }
@@ -222,7 +224,7 @@ export class CreditAnalysisPlatform {
     if (/\/Encrypt\b/i.test(raw)) return this.failUpload(upload, 'final-failure', 'Password-protected PDFs are not supported')
     const sourceHash = createHash('sha256').update(content).digest('hex'); const existing = this.uploadByHash.get(`${upload.userId}:${sourceHash}`)
     if (existing && existing !== upload.id) return structuredClone(this.uploads.get(existing) ?? upload)
-    upload.fileName = input.fileName; upload.mediaType = isPdf ? 'application/pdf' : 'text/html'; upload.size = content.byteLength; upload.sourceHash = sourceHash; upload.scanResult = 'clean'; upload.retentionClass = 'consumer-report'; upload.stage = 'ready-to-parse'; upload.sanitizedContent = raw.replace(/<script[\s\S]*?<\/script>/gi, ''); upload.completedAt = now(); this.uploadByHash.set(`${upload.userId}:${sourceHash}`, upload.id)
+    upload.fileName = input.fileName; upload.mediaType = isPdf ? 'application/pdf' : 'text/html'; upload.size = content.byteLength; upload.sourceHash = sourceHash; upload.scanResult = 'clean'; upload.retentionClass = 'consumer-report'; upload.stage = 'ready-to-parse'; const sanitized = raw.replace(/<script[\s\S]*?<\/script>/gi, ''); const { redacted, redactions } = redactReportText(sanitized); upload.sanitizedContent = redacted; upload.redactionCount = redactions; upload.completedAt = now(); this.uploadByHash.set(`${upload.userId}:${sourceHash}`, upload.id)
     this.audit('upload-completed', upload.userId, upload.id, { mediaType: upload.mediaType, sourceHash }); return structuredClone(upload)
   }
 
