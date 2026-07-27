@@ -1,6 +1,6 @@
 # De-risk legal viability before parser/build
 
-**Status:** accepted
+**Status:** accepted (legal track phase 1 resolved by ADR-0003 — conditional green light to a free pilot)
 
 We are de-risking the product's **legal/regulatory viability** (FCRA, California CCRAA/CPRA, the "educational vs. legal advice" boundary) before investing in a real report parser, ingestion pipeline, or consumer UI. This inverts the obvious "build the parser first" sequence.
 

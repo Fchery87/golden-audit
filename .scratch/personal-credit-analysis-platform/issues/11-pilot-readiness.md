@@ -27,7 +27,7 @@
 
 - [ ] Vendor security, data residency, encryption, key management, subprocessors, incident notification, deletion SLAs, and training/retention evidence approved by accountable owners before real consumer reports are used.
 - [ ] Product, legal, privacy, security, operations, accessibility, and pilot-scope approval gates signed by accountable owners before inviting consumers.
-- [ ] **Legal viability** (FCRA / CCRAA / CPRA, educational-vs-legal-advice boundary) confirmed by a real FCRA attorney — see ADR-0001 and `docs/legal-pre-mortem-brief.md`.
+- [ ] **Legal viability** (FCRA / CCRAA / CPRA, educational-vs-legal-advice boundary) — preliminary opinion received (ADR-0003): **conditionally cleared for a free invite-only pilot**; a paid launch still requires retained California/FCRA counsel final review of pricing, marketing, sample Findings, authorization, privacy notice, terms, retention, and data-flow (tracked in ticket 12). GLBA remains unresolved and is treated as applicable (ADR-0004).
 
 ## Note on the approval gate mechanism
 
