@@ -44,5 +44,6 @@ Foundational gate artifacts are now drafted in support of the remaining human ap
 - `docs/risk-assessment-template.md`
 - `docs/pilot-approval-review-packet.md`
 - `docs/legal-review-packet.md`
+- `docs/approval-handoff-template.md`
 
 These drafts support counsel / privacy / security review, but they do **not** satisfy the human-gated approval criteria by themselves.

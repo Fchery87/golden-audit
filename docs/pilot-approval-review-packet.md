@@ -30,6 +30,7 @@ This packet exists to:
 | `docs/legal-review-packet.md` | Counsel-first legal handoff packet | legal |
 | `docs/privacy-review-packet.md` | Privacy-owner review packet | privacy |
 | `docs/security-review-packet.md` | Security-owner review packet | security |
+| `docs/approval-handoff-template.md` | Fill-in template for sending review packets and collecting approval responses | all reviewers |
 | `.scratch/personal-credit-analysis-platform/issues/12-pilot-legal-conditions.md` | Traceable list of counsel-derived conditions | legal, privacy, security |
 | `.scratch/personal-credit-analysis-platform/issues/11-pilot-readiness.md` | Traceable list of operational/human gates | product, operations, accessibility |
 
@@ -214,6 +215,7 @@ Example evidence references:
    - **approved**
    - **approved with required edits**
    - **blocked**
+   Use `docs/approval-handoff-template.md` to keep requests and responses consistent.
 5. Record approvals only after accountable owners explicitly sign.
 
 ## Current limitation
