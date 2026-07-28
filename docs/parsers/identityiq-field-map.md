@@ -40,17 +40,23 @@
 ## Canonical mapping (to `packages/parser` types)
 Each parsed tradeline maps to `ParserTradeline` (creditor, maskedAccount, balance/status/opened/updated as `ParserValue<T>` with **element/page-level provenance**, original display text, calibrated confidence, missing-value state). Bureaus stay separate (`bureau: 'transunion'|'experian'|'equifax'`) — never destructively merged (CONTEXT.md / spec). Unparseable or absent values → `normalized: null`, `state: 'unknown'` (never invented).
 
-## Adapter plan (sequence) — REVISED after cross-sample validation (4 PDFs + 4 HTMLs, 2020–2025)
+## DECISIVE FINDING — IdentityIQ saved HTML is a template shell (no per-account data)
 
-**Validation result:**
-- **HTML structure is stable** across all samples (currency-row count, tri-bureau layout, bureau-text attribution consistent). → **HTML is the PRIMARY adapter.**
-- **PDF column layout VARIES by template/year** (e.g., 2023 sample uses columns at x≈190/485/650 vs 2020/21/25 at ≈241/372/504). The current fixed `BUREAU_BANDS` **overfit** and misparse the 2023 template. → PDF needs **dynamic per-report column detection** (detect the 3 bureau header x-centers, assign each value to its nearest bureau) rather than hardcoded bands.
+Closer inspection (all 4 HTML samples, 2020–2025) overturned the earlier "HTML-primary" conclusion:
+- Per-account values are **AngularJS `{{ }}` template bindings** (e.g. `{{(tradeline['@currentBalance']|currency)||"-"}}`) populated at runtime by `ng-repeat` filtering a `tradelines` array by `Bureau.@symbol` (TUC/EXP/EQF).
+- The `tradelines` array is **NOT embedded** in the file: `"@currentBalance":` data-form count = 0; no `tradelines = [...]` assignment. Only ~88–113 rendered currency values exist, and they are **summary-level** (totals/scores), not per-account.
+- Therefore the saved HTML **cannot be parsed for per-account tradeline data without executing the embedded AngularJS** to fetch+render — which requires a headless browser AND executes untrusted report-embedded JS (counsel: document JS is untrusted; trust-boundary concern). Not viable for ingestion.
 
-Revised sequence:
-1. **HTML balance adapter (primary, now):** DOM-walk rendered tables; map currency values to bureaus via bureau-text/column headers. Stable across all samples → the canonical, cross-sample-validated path.
-2. **PDF dynamic-column refinement (follow-up):** replace fixed `BUREAU_BANDS` with per-report bureau-header detection so the PDF path is robust across templates (2020/21/23/25).
-3. Detector signatures for IdentityIQ-HTML and IdentityIQ-PDF; all else flagged unsupported.
-4. ≥4-sample smoke tests (structure-only) committed as the overfitting guard.
+## Ingestion decision: PDF is the format
+- **PDF** contains rendered per-account data (balances proven extractable on the real report). → **PDF is the ingestion format** to push users toward.
+- **HTML (IdentityIQ saved)** is a template shell → **do not build an HTML adapter**; drop the "either format" goal unless IdentityIQ provides a rendered HTML export (verify with one fresh official "Download This Report").
+
+## Adapter plan (revised, PDF-only)
+1. **PDF dynamic per-report column detection** (the real next slice): replace fixed `BUREAU_BANDS` with detection of each report's 3 bureau-header x-centers, then assign each value to its nearest bureau column. Validated against all 4 PDF samples (2020/21/23/25) — the overfitting guard.
+2. Multi-line account-block reconstruction (full fields) once columns are detected dynamically.
+3. Detector signature for IdentityIQ-PDF; all else flagged unsupported (reject-rather-than-guess).
+4. ≥4-sample smoke tests (structure-only) committed as the cross-template overfitting guard.
+5. Validation gate: all 4 PDF samples yield 3-bureau tradelines before pilot trust.
 3. **Detector:** register IdentityIQ-PDF and IdentityIQ-HTML signatures; everything else flagged unsupported (reject-rather-than-guess).
 4. **Tests:** synthetic fixture in the IdentityIQ layout (fictitious values) → adapter → `ParserReport`; plus a **local-only smoke test** on the real files asserting structure only (counts, bureaus) — never printing/committing values.
 5. **Validation gate:** ≥2 real samples before pilot trust; field-precision fixtures per ticket 13.
