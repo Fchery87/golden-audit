@@ -19,7 +19,7 @@
 ## Documented only — not exercised on real systems (needs real execution before launch)
 
 - [ ] Runbooks **exist** in `docs/pilot-readiness.md` but are **not exercised** (no drills recorded).
-- [ ] Evaluation corpus (parser field precision/recall, account-match precision, finding PPV, citation validity, AI safety, accessibility, comprehension) is **described**, not measured — there is no real parser or labeled dataset yet.
+- [~] Evaluation corpus is **partially measured**: finding precision/recall = 1.0/1.0 (synthetic labeled corpus) and real-sample finding magnitude/materiality distribution are now MEASURED (ticket 14). Still described-only: parser field precision/recall, account-match precision, finding PPV (needs human labels), citation validity, AI safety, accessibility, comprehension.
 - [ ] Quality and latency reporting by provider/document-type/segment is **specified**, not produced.
 - [ ] Accessibility (WCAG 2.2 AA) target is **documented**; there is **no UI** to evaluate.
 

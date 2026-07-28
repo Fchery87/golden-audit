@@ -108,6 +108,22 @@ test('identityiq-pdf: real-file smoke across all samples (structure only; overfi
   assert.equal(failed.length, 0, `overfitting guard: samples that failed to yield all 3 bureaus: ${failed.join('; ') || '(none)'}`)
 })
 
+test('identityiq-pdf: whole-dollar balances normalize to minor units (x100), matching decimal format', () => {
+  // Regression (ticket 14): parseMoney must treat a bare whole-dollar figure as DOLLARS (x100 to cents),
+  // not as cents. Otherwise bureaus that differ only in display format ($1200 vs $1200.00) would parse to
+  // different values, creating false-positive findings and corrupting magnitude comparisons.
+  const report = parseIdentityIqPdf([
+    word(1, 130, 380, 200, 392, 'Whole Dollar Bank'),
+    word(1, 225, 380, 260, 392, '$1200'),     // TU - no decimal
+    word(1, 356, 380, 390, 392, '$1200.00'),  // EX - decimal
+    word(1, 488, 380, 520, 392, '$1200'),     // EQ - no decimal
+  ])
+  const byBureau = new Map(report.tradelines.map(t => [t.bureau, t]))
+  assert.equal(byBureau.get('transunion')?.balance.normalized, 120000, '$1200 -> 120000 cents')
+  assert.equal(byBureau.get('experian')?.balance.normalized, 120000, '$1200.00 -> 120000 cents')
+  assert.equal(byBureau.get('equifax')?.balance.normalized, 120000, '$1200 -> 120000 cents')
+})
+
 function which(bin: string): boolean {
   try { execSync(`command -v ${bin}`, { stdio: 'ignore' }); return true } catch { return false }
 }

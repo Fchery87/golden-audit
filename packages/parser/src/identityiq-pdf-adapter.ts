@@ -28,11 +28,15 @@ const HEADER_VOCAB = new Set([
 ])
 
 function parseMoney(cell: string): { minor: number | null } {
+  // IdentityIQ balances display as "$1,234.56" (with cents) OR "$1,234" (whole dollars, no decimal).
+  // Both must normalize to minor units (cents): dollars×100[+cents]. A bare whole-dollar figure is
+  // dollars, NOT cents — multiplying by 100 is required (omitting it mis-scales by 100×, which corrupts
+  // magnitude comparisons across bureaus that happen to differ in display format).
   const cleaned = cell.replace(/[^0-9.]/g, '')
   const m = cleaned.match(/^(\d+)\.(\d{2})$/) ?? cleaned.match(/^(\d+)$/)
   if (!m) return { minor: null }
   if (m[2] !== undefined) return { minor: Number(m[1]) * 100 + Number(m[2]) }
-  return { minor: Number(m[1]) }
+  return { minor: Number(m[1]) * 100 }
 }
 
 function rowValue<T>(
