@@ -31,6 +31,9 @@ This packet exists to:
 | `docs/privacy-review-packet.md` | Privacy-owner review packet | privacy |
 | `docs/security-review-packet.md` | Security-owner review packet | security |
 | `docs/approval-handoff-template.md` | Fill-in template for sending review packets and collecting approval responses | all reviewers |
+| `docs/legal-approval-handoff.md` | Ready-to-send legal approval request | legal |
+| `docs/privacy-approval-handoff.md` | Ready-to-send privacy approval request | privacy |
+| `docs/security-approval-handoff.md` | Ready-to-send security approval request | security |
 | `.scratch/personal-credit-analysis-platform/issues/12-pilot-legal-conditions.md` | Traceable list of counsel-derived conditions | legal, privacy, security |
 | `.scratch/personal-credit-analysis-platform/issues/11-pilot-readiness.md` | Traceable list of operational/human gates | product, operations, accessibility |
 
@@ -208,9 +211,9 @@ Example evidence references:
 
 ## Immediate next actions
 
-1. Send **legal** the legal lane packet (`ADR-0003`, `ADR-0004`, legal brief, data flow, privacy draft, ticket 12).
-2. Send **privacy** the privacy notice + data flow.
-3. Send **security** the data flow + WISP skeleton + risk template.
+1. Send **legal** the legal lane packet (`ADR-0003`, `ADR-0004`, legal brief, data flow, privacy draft, ticket 12) using `docs/legal-approval-handoff.md`.
+2. Send **privacy** the privacy notice + data flow using `docs/privacy-approval-handoff.md`.
+3. Send **security** the data flow + WISP skeleton + risk template using `docs/security-approval-handoff.md`.
 4. Ask the accountable owner for each lane to reply with one of:
    - **approved**
    - **approved with required edits**
