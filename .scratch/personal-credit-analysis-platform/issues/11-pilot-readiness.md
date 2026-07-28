@@ -39,6 +39,7 @@ Foundational gate artifacts are now drafted in support of the remaining human ap
 - `docs/data-flow.md`
 - `docs/glba-wisp-skeleton.md`
 - `docs/privacy-notice-draft.md`
+- `docs/privacy-review-packet.md`
 - `docs/risk-assessment-template.md`
 - `docs/pilot-approval-review-packet.md`
 - `docs/legal-review-packet.md`

@@ -25,10 +25,10 @@ This packet exists to:
 |---|---|---|
 | `docs/data-flow.md` | Logical end-to-end data path, storage points, deletion model, processor categories | legal, privacy, security, vendor |
 | `docs/glba-wisp-skeleton.md` | Draft WISP / safeguards structure | security, legal |
-| `docs/privacy-notice-draft.md` | Draft privacy notice / notice-at-collection language | privacy, legal |
+| `docs/privacy-review-packet.md` | Privacy-owner review packet | privacy |
 | `docs/risk-assessment-template.md` | Seeded risk register and scoring rubric | security, operations |
-| `docs/legal-pre-mortem-brief.md` | Counsel-facing problem statement and legal questions | legal |
-| `docs/pilot-readiness.md` | Existing readiness gates, runbooks, approvals model | product, operations, accessibility |
+| `docs/legal-review-packet.md` | Counsel-first legal handoff packet | legal |
+| `docs/privacy-review-packet.md` | Privacy-owner review packet | privacy |
 | `.scratch/personal-credit-analysis-platform/issues/12-pilot-legal-conditions.md` | Traceable list of counsel-derived conditions | legal, privacy, security |
 | `.scratch/personal-credit-analysis-platform/issues/11-pilot-readiness.md` | Traceable list of operational/human gates | product, operations, accessibility |
 
