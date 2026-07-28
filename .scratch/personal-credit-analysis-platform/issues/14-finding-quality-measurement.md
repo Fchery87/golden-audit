@@ -4,7 +4,7 @@
 
 **Blocked by:** none (the engine and real-PDF pipeline already work end-to-end).
 
-**Status:** in-progress
+**Status:** done
 
 > Originated from a `/grill-with-docs` session that overturned an earlier "full-field parser reconstruction" recommendation. Verification showed: (a) the analysis already runs end-to-end on real PDFs (14 balance findings on one report); (b) the engine has exactly ONE evaluator consuming only `balance`; (c) parser full-field would add **zero** findings without new evaluators. So the right next step is to **measure** whether the current findings are real, not to build more parser/evaluator capacity blind.
 
@@ -34,8 +34,8 @@
 | C_Pique | 252 | 46 | 42 | 5 | 7 | 3 | 27 |
 | **Total** | | | **85** | **18 (21%)** | **15 (18%)** | **4 (5%)** | **48 (56%)** |
 
-**Implication:** the findings are **real signal, not noise** — 56% are >$1k (material discrepancies). The pilot's core value claim holds. The precision gap is **~21% of findings are <$10** (likely timing artifacts): the engine is magnitude-agnostic and fires on $0.01 differences, and the #1 alternative explanation ("different update dates") is unverifiable while `updated` is unknown. **Conclusion:** the balance-only analysis is trustworthy enough for the free pilot as-is; a future precision slice (down-rank/suppress sub-$10 findings, or reconstruct `updated` to make the timing caveat checkable) is a refinement, not a blocker.
+**Implication:** conditional on the **current matching heuristic**, the engine output is not dominated by trivial noise — 56% of the observed finding magnitudes are >$1k, and ~21% are <$10. However, ticket 15 later showed that the current match heuristic creates **oversized collision groups** on real PDFs, including some oversized `0.95` proposals. That means this table does **not** establish real-world finding PPV; it characterizes the engine's output *after blindly confirming the current proposed matches*. **Conclusion:** the engine itself is trustworthy within valid match groups, but the next highest-value precision slice is **matching hardening** (or labeled match truth), not parser richness.
 
 ## Notes
-- True precision/recall requires ground truth; the real reports have none (no human labels). The synthetic corpus gives true engine precision/recall; the real characterization gives a noise/materialism signal via magnitude bins — together they answer "are the findings real?" without labeling PII.
-- The pilot's core value ("where your 3 bureau reports disagree") is **already delivered** by balance-only analysis. This measurement decides whether that output is trustworthy enough for the pilot, or whether precision work (e.g. update-date-aware suppression) is needed first.
+- True precision/recall requires ground truth; the real reports have none (no human labels). The synthetic corpus gives true engine precision/recall; the real characterization gives a noise/materialism signal via magnitude bins. **After ticket 15, interpret that real characterization as conditional on the current matching heuristic, not as validated finding PPV.**
+- The pilot's core value ("where your 3 bureau reports disagree") is already delivered **by the engine** once valid match groups exist. Ticket 15 showed the gating risk has shifted: the next priority is **matching hardening** (or labeled match truth), not deeper parser richness.
