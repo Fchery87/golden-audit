@@ -27,6 +27,7 @@ test('trust boundary: an SSN injected into the upload cannot reach the parsed re
   const platform = new CreditAnalysisPlatform()
   const { sessionId } = platform.register({ email: 'redact@example.com', password: 'correct horse battery staple' })
   const workspace = platform.recordConsent(sessionId, consent)
+  platform.acceptAuthorization(sessionId)
   const init = platform.initializeUpload(sessionId, workspace.id)
   // identity intentionally contains a raw SSN; a tradeline balance differs so a finding is produced
   const payload = {

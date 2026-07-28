@@ -51,6 +51,7 @@ function setup() {
   const platform = new CreditAnalysisPlatform()
   const account = platform.register({ email: 'consumer@example.com', password })
   const workspace = platform.recordConsent(account.sessionId, consent)
+  platform.acceptAuthorization(account.sessionId) // FCRA counsel Q-L3: written authorization before processing
   return { platform, ...account, workspace }
 }
 

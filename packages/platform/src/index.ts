@@ -25,6 +25,26 @@ export type Consent = {
   analysisJurisdiction: Jurisdiction
 }
 
+/** FCRA counsel Q-L3 (ticket 12): standalone written authorization the consumer expressly accepts before any processing. */
+export const AUTHORIZATION_VERSION = 'authorization-2026-01'
+export const AUTHORIZATION_TEXT = [
+  'I authorize this service to do the following with the credit report I upload, for my personal educational use only:',
+  '1. Receive the report I provide and parse/analyze it to produce educational Findings.',
+  '2. Temporarily store the report under the disclosed retention policy, then delete it on schedule or on my request.',
+  '3. Return the Findings only to me — never to lenders, landlords, employers, insurers, brokers, attorneys, or credit-repair businesses.',
+  '4. Refrain from selling, sharing, advertising against, or training models on my report data.',
+  'This is a free pilot: no payment, no data sale, no advertising. This is educational information only, is not legal advice, and creates no attorney-client relationship.',
+].join('\n')
+
+/** FCRA counsel Q-L4 (ticket 12): disclosed retention minimization. */
+export const RETENTION_POLICY = {
+  originalsMaxDays: 30,
+  deletionControl: 'Consumer-initiated deletion available at any time via requestDeletion.',
+  description: 'Uploaded reports are retained only as long as operationally necessary to deliver the analysis (at most 30 days), then deleted. Analysis artifacts are deleted on consumer request.',
+} as const
+
+export type AuthorizationRecord = { id: Id; userId: Id; version: string; acceptedAt: string }
+
 type User = { id: Id; email: string; passwordHash: string; passwordSalt: string; consent?: Consent }
 type Session = { id: Id; userId: Id; revokedAt?: string }
 type Workspace = { id: Id; userId: Id; createdAt: string }
@@ -153,6 +173,8 @@ export class CreditAnalysisPlatform {
   private usersByEmail = new Map<string, Id>()
   private sessions = new Map<Id, Session>()
   private workspaces = new Map<Id, Workspace>()
+  private authorizations = new Map<Id, AuthorizationRecord>()
+  private authorizationByUser = new Map<Id, Id>()
   private uploads = new Map<Id, Upload>()
   private uploadByHash = new Map<string, Id>()
   private reports = new Map<Id, CanonicalReport>()
@@ -207,6 +229,17 @@ export class CreditAnalysisPlatform {
     return workspace
   }
 
+  acceptAuthorization(sessionId: Id): AuthorizationRecord {
+    const userId = this.requireSession(sessionId)
+    const record: AuthorizationRecord = { id: randomUUID(), userId, version: AUTHORIZATION_VERSION, acceptedAt: now() }
+    this.authorizations.set(record.id, record); this.authorizationByUser.set(userId, record.id)
+    this.audit('authorization-accepted', userId, record.id, { version: AUTHORIZATION_VERSION })
+    return structuredClone(record)
+  }
+  getAuthorization(sessionId: Id): AuthorizationRecord { const userId = this.requireSession(sessionId); const id = this.authorizationByUser.get(userId); const record = id ? this.authorizations.get(id) : undefined; if (!record) throw new Error('No written authorization on record'); return structuredClone(record) }
+  getRetentionPolicy(): typeof RETENTION_POLICY { return RETENTION_POLICY }
+  private requireAuthorization(userId: Id): void { if (!this.authorizationByUser.has(userId)) throw new Error('Written authorization required before processing') }
+
   getWorkspace(sessionId: Id, workspaceId: Id): Workspace { const userId = this.requireSession(sessionId); const workspace = this.workspaces.get(workspaceId); if (!workspace || workspace.userId !== userId) throw new Error('Not found'); return structuredClone(workspace) }
 
   initializeUpload(sessionId: Id, workspaceId: Id, ttlMs = 300_000): Upload {
@@ -220,6 +253,7 @@ export class CreditAnalysisPlatform {
     const upload = this.uploads.get(input.uploadId); if (!upload || upload.token !== input.token) throw new Error('Upload authorization invalid')
     if (Date.parse(upload.tokenExpiresAt) <= Date.now()) throw new Error('Upload authorization expired')
     if (upload.completedAt) return structuredClone(upload)
+    this.requireAuthorization(upload.userId) // FCRA counsel Q-L3: written authorization required before any processing
     upload.stage = 'scanning'
     const content = Buffer.from(input.bytes); const lowerName = input.fileName.toLowerCase(); const isPdf = input.mediaType === 'application/pdf' && lowerName.endsWith('.pdf') && content.subarray(0, 5).toString() === '%PDF-'
     const isHtml = input.mediaType === 'text/html' && lowerName.endsWith('.html') && /^\s*<(?:!doctype html|html)/i.test(content.toString('utf8'))
