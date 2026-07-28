@@ -19,7 +19,7 @@ A conclusion that a law has been broken or a legal right established. **The prod
 _Avoid:_ violation, illegal, breach (as Finding labels)
 
 **Educational**:
-Content that explains a credit concept or constructive action without asserting anything about the user's specific legal position. Distinct from a Finding about the user's data.
+Content that explains a credit concept or constructive action without asserting anything about the user's specific legal position or promising an improved credit outcome. Distinct from a Finding about the user's data.
 _Avoid:_ advice (ambiguous with legal advice), tip
 
 ### Data and extraction
@@ -52,4 +52,4 @@ _Avoid:_ hiding, filtering
 
 ## Avoid everywhere
 
-account (ambiguous — use Consumer, or the specific entity), dispute (the product does not send these), score guarantee (never given), deletion promise (never given).
+account (ambiguous — use Consumer, or the specific entity), dispute (the product does not send these), score guarantee (never given), deletion promise (never given), credit repair, fix your credit, remove negative items, improve your score.
