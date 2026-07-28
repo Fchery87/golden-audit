@@ -29,6 +29,7 @@ This packet exists to:
 | `docs/risk-assessment-template.md` | Seeded risk register and scoring rubric | security, operations |
 | `docs/legal-review-packet.md` | Counsel-first legal handoff packet | legal |
 | `docs/privacy-review-packet.md` | Privacy-owner review packet | privacy |
+| `docs/security-review-packet.md` | Security-owner review packet | security |
 | `.scratch/personal-credit-analysis-platform/issues/12-pilot-legal-conditions.md` | Traceable list of counsel-derived conditions | legal, privacy, security |
 | `.scratch/personal-credit-analysis-platform/issues/11-pilot-readiness.md` | Traceable list of operational/human gates | product, operations, accessibility |
 
