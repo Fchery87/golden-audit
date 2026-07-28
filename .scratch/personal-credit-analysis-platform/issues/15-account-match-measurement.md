@@ -38,6 +38,7 @@
 **Practical conclusion:** the next highest-value code slice is **matching hardening**, not more parser richness. Examples: never auto-`0.95` any group with more than 3 tradelines; never surface oversized groups as ordinary proposals; add additional disambiguation signals; or require explicit consumer-assisted merge selection for collision sets. Also, ticket 14's real-sample finding-materiality profile must be interpreted as **conditional on the current matching heuristic**, not as validated real-world finding PPV.
 
 ## Notes
+- **Historical note:** this ticket captured the pre-hardening behavior that motivated ticket 16. After ticket 16, the live profiler now shows `oversized@0.95 = 0` because oversized groups are forced to `split`.
 - True precision/recall requires ground truth; the real PDFs have none. Therefore the synthetic corpus provides **true** heuristic precision/recall, while the real-sample pass provides **structural** evidence only (coverage, confidence, grouping shape).
 - This harness measures the **current heuristic**, not the abstract concept of matching. A future matching algorithm (creditor alias normalization, date/term/status signals, consumer-assisted merge UX) would need to be re-measured.
 - Findings remain consumer-confirmed: low-confidence groups (`0.72`) are surfaced as `split` and require user confirmation before analysis. That makes match quality especially important for UX and trust, even when false matches do not automatically reach analysis.

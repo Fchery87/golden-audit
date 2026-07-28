@@ -318,8 +318,62 @@ export class CreditAnalysisPlatform {
   getEffectiveAuthorities(jurisdiction: Jurisdiction, effectiveDate: string): Authority[] { return [...this.publishedAuthorities.values()].filter(item => item.jurisdiction === jurisdiction && item.effectiveFrom <= effectiveDate && this.authorities.get(item.id)?.status !== 'disabled').map(item => structuredClone(item)) }
   getEffectiveEducationModules(jurisdiction: Jurisdiction, effectiveDate: string): EducationModule[] { return [...this.publishedModules.values()].filter(item => item.jurisdiction === jurisdiction && item.effectiveFrom <= effectiveDate && this.modules.get(item.id)?.status !== 'disabled').map(item => structuredClone(item)) }
 
-  proposeMatches(sessionId: Id, reportId: Id): MatchGroup[] { const userId = this.requireSession(sessionId); const report = this.reports.get(reportId); if (!report || report.userId !== userId) throw new Error('Not found'); const grouped = new Map<string, Tradeline[]>(); for (const line of report.tradelines) { const key = `${line.creditor.normalized?.toLowerCase()}:${line.maskedAccount.normalized}`; grouped.set(key, [...(grouped.get(key) ?? []), line]) } const result: MatchGroup[] = []; for (const lines of grouped.values()) { if (lines.length < 2) continue; const balanceAgreement = new Set(lines.map(line => line.balance.normalized)).size === 1; const confidence = balanceAgreement ? 0.95 : 0.72; const group: MatchGroup = { id: randomUUID(), reportId, tradelineIds: lines.map(line => line.id), confidence, signals: ['creditor', 'masked-account', ...(balanceAgreement ? ['balance'] : [])], state: confidence >= 0.9 ? 'proposed' : 'split', history: [] }; this.matches.set(group.id, group); result.push(group) } return structuredClone(result) }
-  decideMatch(sessionId: Id, matchId: Id, action: 'confirmed' | 'rejected' | 'split' | 'merged', reason: string): MatchGroup { const userId = this.requireSession(sessionId); const match = this.matches.get(matchId); const report = match && this.reports.get(match.reportId); if (!match || !report || report.userId !== userId) throw new Error('Not found'); match.state = action; match.history.push({ action, actorId: userId, at: now(), reason }); this.audit('match-decision', userId, match.id, { action }); return structuredClone(match) }
+  proposeMatches(sessionId: Id, reportId: Id): MatchGroup[] {
+    const userId = this.requireSession(sessionId)
+    const report = this.reports.get(reportId)
+    if (!report || report.userId !== userId) throw new Error('Not found')
+    const grouped = new Map<string, Tradeline[]>()
+    for (const line of report.tradelines) {
+      const key = `${line.creditor.normalized?.toLowerCase()}:${line.maskedAccount.normalized}`
+      grouped.set(key, [...(grouped.get(key) ?? []), line])
+    }
+    const result: MatchGroup[] = []
+    for (const lines of grouped.values()) {
+      if (lines.length < 2) continue
+      const balanceAgreement = new Set(lines.map(line => line.balance.normalized)).size === 1
+      const oversized = lines.length > 3
+      const confidence = oversized ? 0.72 : (balanceAgreement ? 0.95 : 0.72)
+      const group: MatchGroup = {
+        id: randomUUID(),
+        reportId,
+        tradelineIds: lines.map(line => line.id),
+        confidence,
+        signals: ['creditor', 'masked-account', ...(balanceAgreement ? ['balance'] : []), ...(oversized ? ['collision-set'] : [])],
+        state: oversized ? 'split' : confidence >= 0.9 ? 'proposed' : 'split',
+        history: [],
+      }
+      this.matches.set(group.id, group)
+      result.push(group)
+    }
+    return structuredClone(result)
+  }
+  decideMatch(sessionId: Id, matchId: Id, action: 'confirmed' | 'rejected' | 'split' | 'merged', reason: string): MatchGroup { const userId = this.requireSession(sessionId); const match = this.matches.get(matchId); const report = match && this.reports.get(match.reportId); if (!match || !report || report.userId !== userId) throw new Error('Not found'); if (action === 'confirmed' && match.tradelineIds.length > 3) throw new Error('Oversized collision sets require subgroup confirmation'); match.state = action; match.history.push({ action, actorId: userId, at: now(), reason }); this.audit('match-decision', userId, match.id, { action }); return structuredClone(match) }
+
+  confirmMatchSubgroup(sessionId: Id, matchId: Id, tradelineIds: Id[], reason: string): MatchGroup {
+    const userId = this.requireSession(sessionId)
+    const match = this.matches.get(matchId)
+    const report = match && this.reports.get(match.reportId)
+    if (!match || !report || report.userId !== userId) throw new Error('Not found')
+    if (match.state !== 'split') throw new Error('Match subgrouping requires a split collision set')
+    const uniqueTradelineIds = [...new Set(tradelineIds)]
+    if (uniqueTradelineIds.length < 2) throw new Error('At least two tradelines are required')
+    if (!uniqueTradelineIds.every(id => match.tradelineIds.includes(id))) throw new Error('Subset must come from the parent collision set')
+    const selected = report.tradelines.filter(line => uniqueTradelineIds.includes(line.id))
+    const balanceAgreement = new Set(selected.map(line => line.balance.normalized)).size === 1
+    const confidence = balanceAgreement ? 0.95 : 0.72
+    const subgroup: MatchGroup = {
+      id: randomUUID(),
+      reportId: match.reportId,
+      tradelineIds: uniqueTradelineIds,
+      confidence,
+      signals: ['consumer-confirmed', 'subgroup', 'creditor', 'masked-account', ...(balanceAgreement ? ['balance'] : [])],
+      state: 'confirmed',
+      history: [{ action: 'confirmed', actorId: userId, at: now(), reason }],
+    }
+    this.matches.set(subgroup.id, subgroup)
+    this.audit('match-subgroup-confirmed', userId, subgroup.id, { parentMatchId: match.id, tradelineCount: String(uniqueTradelineIds.length) })
+    return structuredClone(subgroup)
+  }
 
   runAnalysis(sessionId: Id, reportId: Id, rulesetVersion: string, jurisdiction: Jurisdiction): Analysis { const userId = this.requireSession(sessionId); const report = this.reports.get(reportId); if (!report || report.userId !== userId) throw new Error('Not found'); if (!report.reviewComplete) throw new Error('Report review is incomplete'); const unresolvedMatches = [...this.matches.values()].filter(match => match.reportId === reportId && match.state === 'proposed'); if (unresolvedMatches.length) throw new Error('Account matching confirmation is incomplete'); const rules = this.publishedRulesets.get(rulesetVersion); if (!rules) throw new Error('Ruleset not found')
     const core = evaluateAnalysis({ rules, tradelines: report.tradelines, confirmedMatches: [...this.matches.values()].filter(match => match.reportId === reportId && match.state === 'confirmed').map(match => ({ tradelineIds: match.tradelineIds })), versions: { normalizedInput: report.normalizedVersion, ruleset: rulesetVersion, jurisdiction, parser: report.parserVersion, application: applicationVersion } })

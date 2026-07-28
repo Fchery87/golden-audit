@@ -24,18 +24,18 @@
 
 **Engine correctness (synthetic labeled corpus):** precision = 1.0, recall = 1.0, determinism = identical. The engine fires on every real cross-bureau balance difference and nothing else; low-confidence/null balances are suppressed and audited. No false positives.
 
-**Real-sample magnitude distribution (4 IdentityIQ PDFs, structure-only):**
+**Real-sample magnitude distribution (4 IdentityIQ PDFs, structure-only, under the hardened matching model):**
 
-| Sample | tradelines | matches | findings | <$10 (timing) | $10–100 | $100–1k | >$1k (material) |
-|---|---|---|---|---|---|---|---|
-| IdentityIQ | 205 | 22 | 14 | 4 | 3 | 0 | 7 |
-| (copy) | 141 | 18 | 12 | 3 | 2 | 1 | 6 |
-| (another copy) | 164 | 20 | 17 | 6 | 3 | 0 | 8 |
-| C_Pique | 252 | 46 | 42 | 5 | 7 | 3 | 27 |
-| **Total** | | | **85** | **18 (21%)** | **15 (18%)** | **4 (5%)** | **48 (56%)** |
+| Sample | tradelines | matches | confirmed <=3 | withheld >3 | findings | <$10 (timing) | $10–100 | $100–1k | >$1k (material) |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| IdentityIQ | 205 | 22 | 13 | 9 | 7 | 3 | 2 | 0 | 2 |
+| (copy) | 141 | 18 | 11 | 7 | 5 | 2 | 1 | 0 | 2 |
+| (another copy) | 164 | 20 | 12 | 8 | 9 | 5 | 1 | 0 | 3 |
+| C_Pique | 252 | 46 | 34 | 12 | 30 | 4 | 4 | 1 | 21 |
+| **Total** | 762 | 106 | **70** | **36** | **51** | **14 (27%)** | **8 (16%)** | **1 (2%)** | **28 (55%)** |
 
-**Implication:** conditional on the **current matching heuristic**, the engine output is not dominated by trivial noise — 56% of the observed finding magnitudes are >$1k, and ~21% are <$10. However, ticket 15 later showed that the current match heuristic creates **oversized collision groups** on real PDFs, including some oversized `0.95` proposals. That means this table does **not** establish real-world finding PPV; it characterizes the engine's output *after blindly confirming the current proposed matches*. **Conclusion:** the engine itself is trustworthy within valid match groups, but the next highest-value precision slice is **matching hardening** (or labeled match truth), not parser richness.
+**Implication:** under the hardened matching model, the engine still is not dominated by trivial noise — **55%** of the observed finding magnitudes are >$1k — but the more important truth is that **36 collision sets were withheld** rather than blindly confirmed. That is healthier and more honest than the earlier profile. The remaining real-sample findings should still be interpreted as **conditional on confirmed <=3 match groups**, not full real-world PPV, but the measurement now aligns with the product's fail-closed posture instead of bypassing it. **Conclusion:** the engine remains trustworthy within valid match groups; matching hardening was the right next slice.
 
 ## Notes
-- True precision/recall requires ground truth; the real reports have none (no human labels). The synthetic corpus gives true engine precision/recall; the real characterization gives a noise/materialism signal via magnitude bins. **After ticket 15, interpret that real characterization as conditional on the current matching heuristic, not as validated finding PPV.**
-- The pilot's core value ("where your 3 bureau reports disagree") is already delivered **by the engine** once valid match groups exist. Ticket 15 showed the gating risk has shifted: the next priority is **matching hardening** (or labeled match truth), not deeper parser richness.
+- True precision/recall requires ground truth; the real reports have none (no human labels). The synthetic corpus gives true engine precision/recall; the real characterization gives a noise/materiality signal via magnitude bins. After tickets 15–16, interpret that real characterization as conditional on **consumer-confirmable <=3 tradeline groups**, not as validated finding PPV.
+- The pilot's core value ("where your 3 bureau reports disagree") is already delivered by the engine once valid match groups exist. Ticket 16 moved the product closer to that truth by withholding collision sets instead of letting the measurement bypass them; the next open question is whether matching can be improved further without richer parser fields or labeled truth.

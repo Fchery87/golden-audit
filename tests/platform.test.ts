@@ -120,6 +120,35 @@ test('tickets 06-08: confirmed matching drives deterministic findings and user-c
   const consumerReport = platform.createConsumerReport(sessionId, first.id); assert.match(consumerReport.limitations.join(' '), /No legal verdict/); assert.equal(consumerReport.overview.tradelines, 2); const action = consumerReport.actions[0]!; const updated = platform.updateAction(sessionId, consumerReport.id, action.id, { status: 'under-review', note: 'Gathering statement', documents: ['Recent creditor statement'] }); assert.equal(updated.status, 'under-review')
 })
 
+test('ticket 06 hardening: oversized collision sets require consumer-confirmed subgroups', () => {
+  const { platform, sessionId, workspace } = setup()
+  const initialized = platform.initializeUpload(sessionId, workspace.id)
+  const oversize = {
+    ...structuredClone(reportInput),
+    tradelines: [
+      { bureau: 'equifax' as Bureau, creditor: 'Store Card', account: '10001234', accountType: 'revolving', balance: 10000, status: 'open', opened: '2020-01', updated: '2026-06-30' },
+      { bureau: 'experian' as Bureau, creditor: 'Store Card', account: '20001234', accountType: 'revolving', balance: 10500, status: 'open', opened: '2020-01', updated: '2026-06-28' },
+      { bureau: 'transunion' as Bureau, creditor: 'Store Card', account: '30001234', accountType: 'revolving', balance: 10250, status: 'open', opened: '2020-01', updated: '2026-06-27' },
+      { bureau: 'equifax' as Bureau, creditor: 'Store Card', account: '40001234', accountType: 'revolving', balance: 10100, status: 'open', opened: '2020-01', updated: '2026-06-26' },
+    ],
+  }
+  const upload = platform.completeUpload({ uploadId: initialized.id, token: initialized.token, fileName: 'oversized.html', mediaType: 'text/html', bytes: Buffer.from(`<html>GOLDEN-AUDIT-REPORT:${JSON.stringify(oversize)}</body></html>`) })
+  const report = platform.parseReport(sessionId, upload.id)
+  platform.completeReview(sessionId, report.id)
+  const matches = platform.proposeMatches(sessionId, report.id)
+  assert.equal(matches.length, 1)
+  assert.equal(matches[0]?.state, 'split')
+  assert.equal(matches[0]?.confidence, 0.72)
+  assert.ok(matches[0]?.signals.includes('collision-set'))
+  assert.throws(() => platform.decideMatch(sessionId, matches[0]!.id, 'confirmed', 'too broad'), /Oversized collision sets require subgroup confirmation/)
+  const subgroup = platform.confirmMatchSubgroup(sessionId, matches[0]!.id, matches[0]!.tradelineIds.slice(0, 2), 'consumer confirmed subgroup')
+  assert.equal(subgroup.state, 'confirmed')
+  assert.equal(subgroup.tradelineIds.length, 2)
+  const ruleset = publishFixtureRules(platform)
+  const analysis = platform.runAnalysis(sessionId, report.id, ruleset, 'US-CA')
+  assert.equal(analysis.findings.length, 1)
+})
+
 test('ticket 07 suppression: low-confidence evidence does not create a weak finding', () => {
   const lowConfidence = { ...structuredClone(reportInput), tradelines: structuredClone(reportInput.tradelines).map((line, index) => index === 0 ? { ...line, confidence: 0.4 } : line) }
   const { platform, sessionId, workspace } = setup(); const initialized = platform.initializeUpload(sessionId, workspace.id); const upload = platform.completeUpload({ uploadId: initialized.id, token: initialized.token, fileName: 'low.html', mediaType: 'text/html', bytes: Buffer.from(`<html>GOLDEN-AUDIT-REPORT:${JSON.stringify(lowConfidence)}</body></html>`) }); const report = platform.parseReport(sessionId, upload.id); platform.completeReview(sessionId, report.id); const match = platform.proposeMatches(sessionId, report.id)[0]!; platform.decideMatch(sessionId, match.id, 'confirmed', 'fixture'); const analysis = platform.runAnalysis(sessionId, report.id, publishFixtureRules(platform), 'US-CA'); assert.equal(analysis.findings.length, 0); assert.equal(analysis.audit[0]?.outcome, 'suppressed')

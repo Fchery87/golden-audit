@@ -153,6 +153,7 @@ test('measurement: real-sample match profile (structure-only)', { skip: !hasBin(
       assert.equal(m.state, m.confidence >= 0.9 ? 'proposed' : 'split')
     }
     assert.equal(conf95 + conf72, matches.length, 'all matches should fall into the current two confidence buckets')
+    assert.equal(oversized95, 0, 'oversized collision groups must never remain at 0.95 after hardening')
     rows.push(`  ${path.split('/').pop()?.padEnd(46)} tradelines=${String(report.tradelines.length).padStart(3)} matches=${String(matches.length).padStart(3)} coverage=${String(matchedTradelineIds.size).padStart(3)}/${String(report.tradelines.length).padStart(3)} groups(2b/3b/>3)=${size2}/${size3}/${oversized.length} confidence(0.95/0.72)=${conf95}/${conf72} oversized@0.95=${oversized95}`)
   }
   if (!checkedAny) return

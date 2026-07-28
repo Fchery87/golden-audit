@@ -54,7 +54,9 @@ test('measurement: real-sample finding magnitude distribution (structure-only)',
     const report = p.parseReport(sessionId, up.id)
     p.completeReview(sessionId, report.id)
     const proposed = p.proposeMatches(sessionId, report.id)
-    for (const mt of proposed) p.decideMatch(sessionId, mt.id, 'confirmed', 'measurement')
+    const confirmable = proposed.filter(mt => mt.tradelineIds.length <= 3)
+    const withheldCollisionSets = proposed.length - confirmable.length
+    for (const mt of confirmable) p.decideMatch(sessionId, mt.id, 'confirmed', 'measurement')
     const analysis = p.runAnalysis(sessionId, report.id, publishRules(p), 'US-CA')
 
     const bins: Record<string, number> = { '<$10': 0, '$10-100': 0, '$100-1k': 0, '>$1k': 0 }
@@ -66,7 +68,7 @@ test('measurement: real-sample finding magnitude distribution (structure-only)',
       bins[binOf(mag)] = (bins[binOf(mag)] ?? 0) + 1
     }
     totalFindings += analysis.findings.length
-    rows.push(`  ${path.split('/').pop()?.padEnd(46)} tradelines=${String(report.tradelines.length).padStart(3)} matches=${String(proposed.length).padStart(3)} findings=${String(analysis.findings.length).padStart(3)} | <$10(timing)=${bins['<$10']} $10-100=${bins['$10-100']} $100-1k=${bins['$100-1k']} >$1k(material)=${bins['>$1k']}`)
+    rows.push(`  ${path.split('/').pop()?.padEnd(46)} tradelines=${String(report.tradelines.length).padStart(3)} matches=${String(proposed.length).padStart(3)} confirmed<=3=${String(confirmable.length).padStart(3)} withheld>3=${String(withheldCollisionSets).padStart(3)} findings=${String(analysis.findings.length).padStart(3)} | <$10(timing)=${bins['<$10']} $10-100=${bins['$10-100']} $100-1k=${bins['$100-1k']} >$1k(material)=${bins['>$1k']}`)
   }
   if (!checkedAny) return // all files absent (gitignored) -> pass vacuously in CI
   console.log('  [real-sample measurement]\n' + rows.join('\n'))
