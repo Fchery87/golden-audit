@@ -67,15 +67,45 @@ test('identityiq-pdf: inbound redaction strips identifier-bearing words before a
   assert.ok(redactWords([word(1, 0, 0, 10, 10, '123-45-6789')])[0]?.text === '[REDACTED]')
 })
 
-// Local-only smoke test on the REAL IdentityIQ PDF: structure assertions only, skipped
-// if the file or poppler is absent (so it never fails in CI / for other contributors).
-test('identityiq-pdf: real-file smoke (structure only, skipped if unavailable)', { skip: !(existsSync('docs/reports/Credit Report - IdentityIQ.pdf') && which('pdftotext')) }, () => {
-  const html = execSync('pdftotext -bbox "docs/reports/Credit Report - IdentityIQ.pdf" -', { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 })
-  const report = parseIdentityIqPdfBbox(html)
-  const bureaus = new Set(report.tradelines.map(t => t.bureau))
-  assert.ok(report.tradelines.length > 0, 'expected the real report to yield tradelines')
-  assert.ok(bureaus.has('transunion') && bureaus.has('experian') && bureaus.has('equifax'), `expected all 3 bureaus; got ${[...bureaus].join(',')}`)
-  // assert NOTHING about values — structure only.
+test('identityiq-pdf: dynamic column detection — maps non-standard (2023-style) columns to correct bureaus', () => {
+  // Bureau header row at the 2023 template's column x-centers (308/485/650), NOT the
+  // legacy 241/372/504. With fixed bands this would mis-map EX→EQ; dynamic detection must fix it.
+  const dynamicFixture: Word[] = [
+    word(1, 288, 100, 328, 112, 'TRANSUNION'), word(1, 465, 100, 505, 112, 'EXPERIAN'), word(1, 630, 100, 670, 112, 'EQUIFAX'),
+    word(1, 130, 380, 200, 392, 'Test Creditor'),
+    word(1, 288, 380, 328, 392, '$111.00'),  // xc≈308 → TU
+    word(1, 465, 380, 505, 392, '$222.00'),  // xc≈485 → EX
+    word(1, 630, 380, 670, 392, '$333.00'),  // xc≈650 → EQ
+  ]
+  const report = parseIdentityIqPdf(dynamicFixture)
+  const byBureau = new Map(report.tradelines.filter(t => t.creditor === 'Test Creditor').map(t => [t.bureau, t]))
+  assert.equal(byBureau.get('transunion')?.balance.normalized, 11100, 'TU column at x308 must map to transunion')
+  assert.equal(byBureau.get('experian')?.balance.normalized, 22200, 'EX column at x485 must map to experian (fixed bands would mis-map this to equifax)')
+  assert.equal(byBureau.get('equifax')?.balance.normalized, 33300, 'EQ column at x650 must map to equifax')
+})
+
+// Local-only smoke test on ALL real IdentityIQ PDFs (the cross-template overfitting guard):
+// structure assertions only, skipped if files or poppler are absent.
+const REAL_PDFS = [
+  'docs/reports/Credit Report - IdentityIQ.pdf',
+  'docs/reports/Credit Report - IdentityIQ (copy).pdf',
+  'docs/reports/Credit Report - IdentityIQ (another copy).pdf',
+  'docs/reports/C_Pique_Credit Report - IdentityIQ.pdf',
+]
+test('identityiq-pdf: real-file smoke across all samples (structure only; overfitting guard)', { skip: !which('pdftotext') }, () => {
+  const missing: string[] = []
+  const failed: string[] = []
+  for (const p of REAL_PDFS) {
+    if (!existsSync(p)) { missing.push(p); continue }
+    const html = execSync(`pdftotext -bbox "${p}" -`, { encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 })
+    const report = parseIdentityIqPdfBbox(html)
+    const bureaus = new Set(report.tradelines.map(t => t.bureau))
+    const ok = report.tradelines.length > 0 && bureaus.has('transunion') && bureaus.has('experian') && bureaus.has('equifax')
+    if (!ok) failed.push(`${p.split('/').pop()} (tradelines=${report.tradelines.length}, bureaus=[${[...bureaus].join(',')}])`)
+    // assert NOTHING about values — structure only.
+  }
+  if (missing.length === REAL_PDFS.length) { /* all absent -> skip silently via no-assertion? still must pass */ }
+  assert.equal(failed.length, 0, `overfitting guard: samples that failed to yield all 3 bureaus: ${failed.join('; ') || '(none)'}`)
 })
 
 function which(bin: string): boolean {

@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import type { Bureau, ParserReport, ParserTradeline, ParserValue } from './types.js'
-import { bureauForX, CREDITOR_X_MAX, xCenter, type Word } from './positional-types.js'
+import { bureauForX, detectBureauColumns, nearestBureau, CREDITOR_X_MAX, xCenter, type Word } from './positional-types.js'
 
 /**
  * IdentityIQ tri-bureau PDF adapter (spike).
@@ -55,6 +55,10 @@ function cleanCreditor(tokens: string[]): string {
 
 export function parseIdentityIqPdf(words: Word[]): ParserReport {
   const tradelines: ParserTradeline[] = []
+  // Dynamic per-report column detection (cross-template robust). Falls back to the
+  // legacy fixed BUREAU_BANDS only if no columnar header row is found.
+  const detected = detectBureauColumns(words)
+  const bureauOf = (x: number) => (detected ? nearestBureau(x, detected) : bureauForX(x))
 
   // Group words into rows per page by y-band.
   const byPage = new Map<number, Word[]>()
@@ -76,7 +80,7 @@ export function parseIdentityIqPdf(words: Word[]): ParserReport {
       // money value per bureau in this row
       const bureauMoney = new Map<Bureau, { word: Word; minor: number }>()
       for (const w of row) {
-        const bureau = bureauForX(xCenter(w))
+        const bureau = bureauOf(xCenter(w))
         if (!bureau) continue
         const { minor } = parseMoney(w.text)
         if (minor !== null) bureauMoney.set(bureau, { word: w, minor })
