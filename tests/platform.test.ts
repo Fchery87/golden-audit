@@ -1,5 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { existsSync, readFileSync } from 'node:fs'
+import { execSync } from 'node:child_process'
 import { CreditAnalysisPlatform, type Bureau } from '../packages/platform/src/index.js'
 
 const password = 'correct horse battery staple'
@@ -11,6 +13,39 @@ const reportInput = {
     { bureau: 'experian' as Bureau, creditor: 'Example Bank', account: '12345678', accountType: 'revolving', balance: 15000, status: 'open', opened: '2020-01', updated: '2026-06-28' },
   ],
 }
+
+// === Wiring proof: the proven IdentityIQ PDF adapter is now the LIVE ingestion path (ticket 13). ===
+// Uploads a real (gitignored) IdentityIQ PDF through the full platform flow and asserts it routed through
+// the REAL adapter — not the synthetic fixture marker. Structure-only; never asserts or prints values.
+const WIRING_PDFS = [
+  'docs/reports/Credit Report - IdentityIQ.pdf',
+  'docs/reports/Credit Report - IdentityIQ (copy).pdf',
+  'docs/reports/Credit Report - IdentityIQ (another copy).pdf',
+  'docs/reports/C_Pique_Credit Report - IdentityIQ.pdf',
+]
+test('wiring: completeUpload(pdf) → parseReport routes through the real IdentityIQ adapter', { skip: !hasBin('pdftotext') }, () => {
+  let checkedAny = false; const failed: string[] = []
+  for (const p of WIRING_PDFS) {
+    if (!existsSync(p)) continue
+    checkedAny = true
+    const { platform, sessionId, workspace } = setup()
+    const init = platform.initializeUpload(sessionId, workspace.id)
+    const completed = platform.completeUpload({ uploadId: init.id, token: init.token, fileName: p.split('/').pop() ?? p, mediaType: 'application/pdf', bytes: readFileSync(p) })
+    if (completed.stage !== 'ready-to-parse' || completed.mediaType !== 'application/pdf' || completed.scanResult !== 'clean') { failed.push(`${p}: upload stage/media/scan`); continue }
+    if (completed.sanitizedContent !== undefined) failed.push(`${p}: PDF upload must NOT carry sanitizedContent (PII hygiene)`) // bytes live in a private map, never on the returned Upload
+    const report = platform.parseReport(sessionId, completed.id)
+    const bureaus = new Set(report.tradelines.map(t => t.balance.bureau))
+    const realAdapter = report.provider === 'identityiq' && report.template === 'identityiq-pdf-v1' // NOT 'synthetic-provider'/'pilot-v1'
+    const threeBureaus = bureaus.has('transunion') && bureaus.has('experian') && bureaus.has('equifax')
+    const usdBalances = report.tradelines.every(t => t.balance.currency === 'USD' && t.balance.state === 'known')
+    if (!realAdapter || report.tradelines.length === 0 || !threeBureaus || !usdBalances) failed.push(`${p}: provider=${report.provider} template=${report.template} tradelines=${report.tradelines.length} bureaus=[${[...bureaus].join(',')}] usd=${usdBalances}`)
+    // assert NOTHING about balance amounts or account numbers — structure only.
+  }
+  if (!checkedAny) return // all real files absent (gitignored) → pass vacuously in CI
+  assert.equal(failed.length, 0, `wiring proof failures: ${failed.join('; ') || '(none)'}`)
+})
+
+function hasBin(bin: string): boolean { try { execSync(`command -v ${bin}`, { stdio: 'ignore' }); return true } catch { return false } }
 
 function setup() {
   const platform = new CreditAnalysisPlatform()

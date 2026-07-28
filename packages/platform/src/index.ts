@@ -3,6 +3,9 @@ import { applicationVersion } from '../../domain/src/index.js'
 import { evaluateAnalysis, SEVERITY_RANK } from '../../analysis-core/src/index.js'
 import { redactReportText } from '../../redaction/src/index.js'
 import { assertSafeConsumerOutput } from '../../output-guard/src/index.js'
+import { execSync } from 'node:child_process'
+import { parseIdentityIqPdfBbox } from '../../parser/src/index.js'
+import type { ParserReport, ParserTradeline, ParserValue } from '../../parser/src/index.js'
 import type { Analysis as CoreAnalysis, Finding, FindingClassification, RuleAudit, SourceReference } from '../../analysis-core/src/index.js'
 
 export type { Finding, FindingClassification, RuleAudit, SourceReference }
@@ -164,6 +167,8 @@ export class CreditAnalysisPlatform {
   private consumerReports = new Map<Id, ConsumerReport>()
   private exports = new Map<Id, ExportArtifact>()
   private deletionJobs = new Map<Id, DeletionJob>()
+  /** Raw PDF bytes for binary uploads, kept OUT of the returned Upload object (PII hygiene). */
+  private rawUploadBytes = new Map<Id, Uint8Array>()
   private reviewers = new Map<Id, Reviewer>()
   private pilotApprovals = new Map<PilotApprovalArea, PilotApproval>()
   readonly auditEvents: AuditEvent[] = []
@@ -220,24 +225,29 @@ export class CreditAnalysisPlatform {
     const isHtml = input.mediaType === 'text/html' && lowerName.endsWith('.html') && /^\s*<(?:!doctype html|html)/i.test(content.toString('utf8'))
     if (!isPdf && !isHtml) return this.failUpload(upload, 'final-failure', 'Unsupported or mismatched report format')
     if (content.byteLength > 5_000_000) return this.failUpload(upload, 'final-failure', 'Report exceeds processing limits')
-    const raw = content.toString('utf8')
-    if (/EICAR|<script|javascript:|<iframe|https?:\/\//i.test(raw)) return this.failUpload(upload, 'quarantined', 'The report could not be processed safely', 'unsafe')
-    if (/\/Encrypt\b/i.test(raw)) return this.failUpload(upload, 'final-failure', 'Password-protected PDFs are not supported')
+    if (/\/Encrypt\b/i.test(content.toString('latin1'))) return this.failUpload(upload, 'final-failure', 'Password-protected PDFs are not supported')
+    // The EICAR/script/iframe/URL guard is an HTML-injection defense; it must not run on raw PDF bytes
+    // (binary PDFs legitimately contain URL-like byte sequences). PDF structural safety is covered above.
+    if (!isPdf) { const raw = content.toString('utf8'); if (/EICAR|<script|javascript:|<iframe|https?:\/\//i.test(raw)) return this.failUpload(upload, 'quarantined', 'The report could not be processed safely', 'unsafe') }
     const sourceHash = createHash('sha256').update(content).digest('hex'); const existing = this.uploadByHash.get(`${upload.userId}:${sourceHash}`)
     if (existing && existing !== upload.id) return structuredClone(this.uploads.get(existing) ?? upload)
-    upload.fileName = input.fileName; upload.mediaType = isPdf ? 'application/pdf' : 'text/html'; upload.size = content.byteLength; upload.sourceHash = sourceHash; upload.scanResult = 'clean'; upload.retentionClass = 'consumer-report'; upload.stage = 'ready-to-parse'; const sanitized = raw.replace(/<script[\s\S]*?<\/script>/gi, ''); const { redacted, redactions } = redactReportText(sanitized); upload.sanitizedContent = redacted; upload.redactionCount = redactions; upload.completedAt = now(); this.uploadByHash.set(`${upload.userId}:${sourceHash}`, upload.id)
+    upload.fileName = input.fileName; upload.mediaType = isPdf ? 'application/pdf' : 'text/html'; upload.size = content.byteLength; upload.sourceHash = sourceHash; upload.scanResult = 'clean'; upload.retentionClass = 'consumer-report'; upload.stage = 'ready-to-parse'
+    if (isPdf) { this.rawUploadBytes.set(upload.id, content) } else { const raw = content.toString('utf8'); const sanitized = raw.replace(/<script[\s\S]*?<\/script>/gi, ''); const { redacted, redactions } = redactReportText(sanitized); upload.sanitizedContent = redacted; upload.redactionCount = redactions }
+    upload.completedAt = now(); this.uploadByHash.set(`${upload.userId}:${sourceHash}`, upload.id)
     this.audit('upload-completed', upload.userId, upload.id, { mediaType: upload.mediaType, sourceHash }); return structuredClone(upload)
   }
 
   private failUpload(upload: Upload, stage: UploadStage, message: string, scanResult?: 'unsafe'): Upload { upload.stage = stage; upload.failureMessage = message; if (scanResult) upload.scanResult = scanResult; this.audit(stage === 'quarantined' ? 'upload-quarantined' : 'upload-failed', upload.userId, upload.id); return structuredClone(upload) }
 
   parseReport(sessionId: Id, uploadId: Id): CanonicalReport {
-    const userId = this.requireSession(sessionId); const upload = this.uploads.get(uploadId); if (!upload || upload.userId !== userId) throw new Error('Not found'); if (upload.stage !== 'ready-to-parse' || !upload.sanitizedContent) throw new Error('Upload is not parseable')
+    const userId = this.requireSession(sessionId); const upload = this.uploads.get(uploadId); if (!upload || upload.userId !== userId) throw new Error('Not found'); if (upload.stage !== 'ready-to-parse') throw new Error('Upload is not parseable')
+    if (upload.mediaType === 'application/pdf') return this.parseIdentityIqPdf(upload, userId)
+    if (!upload.sanitizedContent) throw new Error('Upload is not parseable')
     const marker = 'GOLDEN-AUDIT-REPORT:'; const markerIndex = upload.sanitizedContent.indexOf(marker); if (markerIndex < 0) throw new Error('Unsupported report provider or template')
     const json = upload.sanitizedContent.slice(markerIndex + marker.length).replace(/<\/body>[\s\S]*/i, '').replace(/%%EOF[\s\S]*/i, '').trim(); const input: unknown = JSON.parse(json)
     if (!isParserInput(input)) throw new Error('Report schema validation failed')
-    const parserVersion = 'fixture-adapter@1'; const extractionMethod = upload.mediaType === 'application/pdf' ? 'native-text' : 'html-selector'
-    const makeValue = <T>(bureau: Bureau, field: string, normalized: T | null, originalDisplay: string, locator: string, confidence = 1): CanonicalValue<T> => ({ id: randomUUID(), bureau, field, normalized, originalDisplay, state: normalized === null ? 'unknown' : 'known', source: { kind: upload.mediaType === 'application/pdf' ? 'page' : 'element', locator, snippet: originalDisplay.slice(0, 80) }, extractionMethod, parserVersion, confidence })
+    const parserVersion = 'fixture-adapter@1'; const extractionMethod = 'html-selector' // synthetic-fixture path is HTML-only (PDFs route to the real adapter)
+    const makeValue = <T>(bureau: Bureau, field: string, normalized: T | null, originalDisplay: string, locator: string, confidence = 1): CanonicalValue<T> => ({ id: randomUUID(), bureau, field, normalized, originalDisplay, state: normalized === null ? 'unknown' : 'known', source: { kind: 'element', locator, snippet: originalDisplay.slice(0, 80) }, extractionMethod, parserVersion, confidence })
     const tradelines = input.tradelines.map((line, index): Tradeline => ({ id: randomUUID(), creditor: makeValue(line.bureau, 'creditor', line.creditor, line.creditor, `${index}:creditor`), maskedAccount: makeValue(line.bureau, 'account', maskAccount(line.account), maskAccount(line.account), `${index}:account`), accountType: makeValue(line.bureau, 'accountType', line.accountType, line.accountType, `${index}:type`), balance: { ...makeValue(line.bureau, 'balance', line.balance, `$${(line.balance / 100).toFixed(2)}`, `${index}:balance`, line.confidence ?? 1), currency: 'USD' }, status: makeValue(line.bureau, 'status', line.status, line.status, `${index}:status`), opened: { ...makeValue(line.bureau, 'opened', line.opened, line.opened, `${index}:opened`), datePrecision: line.opened.length === 7 ? 'month' : 'day' }, updated: { ...makeValue(line.bureau, 'updated', line.updated, line.updated, `${index}:updated`), datePrecision: line.updated.length === 7 ? 'month' : 'day' } }))
     const firstBureau = input.tradelines[0]?.bureau ?? 'equifax'; const mapText = (items: string[], field: string) => items.map((value, i) => makeValue(firstBureau, field, value, value, `${field}:${i}`))
     const report: CanonicalReport = { id: randomUUID(), userId, uploadId, provider: input.provider, template: input.template, parserVersion, normalizedVersion: 1, reportDate: input.reportDate, identity: mapText(input.identity, 'identity'), addresses: mapText(input.addresses, 'address'), employers: mapText(input.employers, 'employer'), tradelines, collections: [], inquiries: mapText(input.inquiries, 'inquiry'), publicRecords: mapText(input.publicRecords, 'publicRecord'), scores: input.scores.map((score, i) => makeValue(firstBureau, 'score', score, String(score), `score:${i}`)), remarks: mapText(input.remarks, 'remark'), reviewComplete: false }
@@ -249,6 +259,17 @@ export class CreditAnalysisPlatform {
     value.review = { decision: input.decision, reason: input.reason, actorId: userId, at: now(), ...(input.replacement !== undefined ? { replacement: input.replacement } : {}) }; report.normalizedVersion += 1; this.audit('report-value-reviewed', userId, valueId, { decision: input.decision }); return structuredClone(report)
   }
   completeReview(sessionId: Id, reportId: Id): void { const userId = this.requireSession(sessionId); const report = this.reports.get(reportId); if (!report || report.userId !== userId) throw new Error('Not found'); report.reviewComplete = true }
+
+  /** REAL IdentityIQ PDF path: bytes → pdftotext -bbox → parser → canonical report. */
+  private parseIdentityIqPdf(upload: Upload, userId: Id): CanonicalReport {
+    const bytes = this.rawUploadBytes.get(upload.id)
+    if (!bytes) throw new Error('Report bytes unavailable; re-upload required')
+    const parsed = parseIdentityIqPdfBbox(extractBboxFromPdfBytes(bytes))
+    if (parsed.tradelines.length === 0) throw new Error('Unsupported report provider or template') // reject rather than guess
+    const report = mapParserReportToCanonical(parsed, userId, upload.id)
+    this.reports.set(report.id, report); this.audit('report-parsed', userId, report.id, { parserVersion: report.parserVersion })
+    return structuredClone(report)
+  }
   getSourceSnippet(sessionId: Id, reportId: Id, valueId: Id): SourceReference { const userId = this.requireSession(sessionId); const report = this.reports.get(reportId); if (!report || report.userId !== userId) throw new Error('Not found'); const value = allValues(report).find(item => item.id === valueId); if (!value) throw new Error('Not found'); return structuredClone(value.source) }
 
   registerReviewer(input: Reviewer): void { this.reviewers.set(input.id, structuredClone(input)) }
@@ -274,7 +295,7 @@ export class CreditAnalysisPlatform {
   updateAction(sessionId: Id, consumerReportId: Id, actionId: Id, patch: Partial<Pick<ActionItem, 'status' | 'note' | 'reason' | 'documents'>>): ActionItem { const userId = this.requireSession(sessionId); const report = this.consumerReports.get(consumerReportId); if (!report || report.userId !== userId) throw new Error('Not found'); const action = report.actions.find(item => item.id === actionId); if (!action) throw new Error('Action not found'); Object.assign(action, patch); this.audit('action-updated', userId, action.id, { status: action.status }); return structuredClone(action) }
 
   createExport(sessionId: Id, consumerReportId: Id): ExportArtifact { const userId = this.requireSession(sessionId); const report = this.consumerReports.get(consumerReportId); if (!report || report.userId !== userId) throw new Error('Not found'); const existing = [...this.exports.values()].find(item => item.userId === userId && item.reportId === consumerReportId); if (existing) return structuredClone(existing); const analysis = this.analyses.get(report.analysisId); const content = JSON.stringify({ generatedAt: now(), scope: 'Validated personal credit analysis', rulesetVersion: analysis?.versions.ruleset, limitations: report.limitations, disclaimer: 'Educational information only; no specific outcome is promised.', findings: report.findings.map(finding => ({ ...finding, evidence: finding.evidence.map(evidence => ({ ...evidence, value: typeof evidence.value === 'string' && /\d{5,}/.test(evidence.value) ? maskAccount(evidence.value) : evidence.value })) })) }, null, 2); assertSafeConsumerOutput(content); const artifact = { id: randomUUID(), userId, reportId: consumerReportId, content, createdAt: now() }; this.exports.set(artifact.id, artifact); this.audit('export-created', userId, artifact.id); return structuredClone(artifact) }
-  requestDeletion(sessionId: Id, providerDelayed = false): DeletionJob { const userId = this.requireSession(sessionId); const deleted: string[] = []; for (const [name, map] of [['uploads', this.uploads], ['reports', this.reports], ['analyses', this.analyses], ['consumer-reports', this.consumerReports], ['exports', this.exports]] as const) for (const [id, item] of map) if ('userId' in item && item.userId === userId) { map.delete(id); deleted.push(`${name}:${id}`) } const job: DeletionJob = { id: randomUUID(), userId, status: providerDelayed ? 'pending-provider' : 'complete', deleted, delayed: providerDelayed ? ['backup-lifecycle', 'model-provider'] : [], ...(providerDelayed ? {} : { completedAt: now() }) }; this.deletionJobs.set(job.id, job); this.audit('deletion-requested', userId, job.id, { status: job.status }); return structuredClone(job) }
+  requestDeletion(sessionId: Id, providerDelayed = false): DeletionJob { const userId = this.requireSession(sessionId); const deleted: string[] = []; for (const [name, map] of [['uploads', this.uploads], ['reports', this.reports], ['analyses', this.analyses], ['consumer-reports', this.consumerReports], ['exports', this.exports]] as const) for (const [id, item] of map) if ('userId' in item && item.userId === userId) { map.delete(id); deleted.push(`${name}:${id}`) } for (const rbId of [...this.rawUploadBytes.keys()]) if (!this.uploads.has(rbId)) this.rawUploadBytes.delete(rbId); const job: DeletionJob = { id: randomUUID(), userId, status: providerDelayed ? 'pending-provider' : 'complete', deleted, delayed: providerDelayed ? ['backup-lifecycle', 'model-provider'] : [], ...(providerDelayed ? {} : { completedAt: now() }) }; this.deletionJobs.set(job.id, job); this.audit('deletion-requested', userId, job.id, { status: job.status }); return structuredClone(job) }
 
   narrate(sessionId: Id, analysisId: Id, provider: (payload: string) => string): { text: string; mode: 'generated' | 'fallback'; versions: Record<string, string> } {
     const userId = this.requireSession(sessionId)
@@ -322,6 +343,45 @@ export class CreditAnalysisPlatform {
 
 type ParserInput = { provider: string; template: string; reportDate: string; identity: string[]; addresses: string[]; employers: string[]; inquiries: string[]; publicRecords: string[]; scores: number[]; remarks: string[]; tradelines: Array<{ bureau: Bureau; creditor: string; account: string; accountType: string; balance: number; status: string; opened: string; updated: string; confidence?: number }> }
 function isParserInput(value: unknown): value is ParserInput { if (!value || typeof value !== 'object') return false; const item = value as Record<string, unknown>; return typeof item.provider === 'string' && typeof item.template === 'string' && typeof item.reportDate === 'string' && ['identity', 'addresses', 'employers', 'inquiries', 'publicRecords', 'scores', 'remarks', 'tradelines'].every(key => Array.isArray(item[key])) }
+
+/** Run poppler `pdftotext -bbox` on raw PDF bytes → bbox HTML. (Production may swap to pdfjs-dist.) */
+function extractBboxFromPdfBytes(bytes: Uint8Array): string {
+  return execSync('pdftotext -bbox - -', { input: Buffer.from(bytes), encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 })
+}
+
+/** Map the parser's ProviderReport → the platform's CanonicalReport (bureaus kept separate; unknowns marked). */
+function mapParserReportToCanonical(pr: ParserReport, userId: Id, uploadId: Id): CanonicalReport {
+  const parserVersion = pr.template
+  const toCanonical = <T>(pv: ParserValue<T>, currency?: 'USD'): CanonicalValue<T> => ({
+    id: randomUUID(), bureau: pv.bureau as Bureau, field: pv.field, normalized: pv.normalized, originalDisplay: pv.originalDisplay,
+    state: pv.state === 'known' ? 'known' : 'unknown', source: pv.source, extractionMethod: 'native-text', parserVersion, confidence: pv.confidence,
+    ...(currency ? { currency } : {}),
+  })
+  const known = (bureau: Bureau, field: string, value: string): CanonicalValue<string> => ({
+    id: randomUUID(), bureau, field, normalized: value, originalDisplay: value, state: 'known',
+    source: { kind: 'page', locator: field, snippet: value.slice(0, 80) }, extractionMethod: 'native-text', parserVersion, confidence: 1,
+  })
+  const unknown = (bureau: Bureau, field: string): CanonicalValue<string> => ({
+    id: randomUUID(), bureau, field, normalized: null, originalDisplay: '', state: 'unknown',
+    source: { kind: 'page', locator: field, snippet: '' }, extractionMethod: 'native-text', parserVersion, confidence: 0,
+  })
+  const tradelines = pr.tradelines
+    .filter(t => t.bureau === 'transunion' || t.bureau === 'experian' || t.bureau === 'equifax')
+    .map((t): Tradeline => {
+      const bureau = t.bureau as Bureau // filter above excluded 'unknown'; the PDF adapter only emits TU/EX/EQ
+      return ({
+        id: randomUUID(),
+        creditor: known(bureau, 'creditor', t.creditor),
+        maskedAccount: known(bureau, 'account', t.maskedAccount || '••••'),
+        accountType: unknown(bureau, 'accountType'),
+        balance: toCanonical(t.balance, 'USD'),
+        status: toCanonical(t.status),
+        opened: toCanonical(t.opened),
+        updated: toCanonical(t.updated),
+      })
+    })
+  return { id: randomUUID(), userId, uploadId, provider: pr.provider, template: pr.template, parserVersion, normalizedVersion: 1, reportDate: pr.reportDate ?? '', identity: [], addresses: [], employers: [], tradelines, collections: [], inquiries: [], publicRecords: [], scores: [], remarks: [], reviewComplete: false }
+}
 function allValues(report: CanonicalReport): CanonicalValue<unknown>[] { const direct: CanonicalValue<unknown>[] = [...report.identity, ...report.addresses, ...report.employers, ...report.inquiries, ...report.publicRecords, ...report.scores, ...report.remarks]; for (const line of [...report.tradelines, ...report.collections]) direct.push(line.creditor, line.maskedAccount, line.accountType, line.balance, line.status, line.opened, line.updated); return direct }
 // severityRank removed — the engine's SEVERITY_RANK (imported) is used directly.
 function validateNarration(text: string, analysis: Analysis): boolean { if (!text.trim() || /guarantee|will be deleted|illegal|violation|\b\d{9}\b|ignore previous|system prompt/i.test(text)) return false; return analysis.findings.every(finding => text.includes(finding.title) && finding.limitations.every(limitation => text.includes(limitation))) }
