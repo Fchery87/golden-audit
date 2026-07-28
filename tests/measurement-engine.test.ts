@@ -73,3 +73,33 @@ test('measurement: determinism — identical inputs reproduce identical findings
   assert.deepEqual(a.audit, b.audit)
   assert.deepEqual(a.findings.map(({ id: _id, ...f }) => f), b.findings.map(({ id: _id, ...f }) => f))
 })
+
+test('measurement: minimumMagnitude down-ranks sub-threshold findings (low severity + flag), not suppressed', () => {
+  // Ticket 17 — a real-but-trivial difference is NOT suppressed (CONTEXT.md reserves suppression for
+  // missing/low-confidence/ambiguous/non-comparable evidence). It still fires, but at 'low' severity
+  // with a 'likely reporting-date artifact' flag so the consumer can skim past it.
+  const thresholdRule: EvaluableRule = { ...rule, minimumMagnitude: 1000 } // $10 = 1000 cents
+  const groups: Group[] = [
+    { id: 'tiny', label: 'differ', balances: [10000, 10050] },       // $0.50 diff
+    { id: 'material', label: 'differ', balances: [10000, 500000] },   // $4900 diff
+  ]
+  const { tradelines, matches } = corpus(groups)
+  const result = evaluateAnalysis({ rules: [thresholdRule], tradelines, confirmedMatches: matches, versions })
+  assert.equal(result.findings.length, 2, 'both must still fire — down-rank is not suppression')
+  const idToGroup = new Map<string, string>()
+  for (const g of groups) g.balances.forEach((_, i) => idToGroup.set(`${g.id}#${i}`, g.id))
+  const byGroup = new Map(result.findings.map(f => [idToGroup.get(f.evidence[0]?.tradelineId ?? '') ?? '', f]))
+  const tiny = byGroup.get('tiny'); const material = byGroup.get('material')
+  assert.ok(tiny && material)
+  assert.equal(tiny!.severity, 'low', 'sub-threshold finding down-ranked to low')
+  assert.ok(tiny!.limitations.some(l => /reporting-date artifact/i.test(l)), 'sub-threshold flagged as likely timing')
+  assert.equal(material!.severity, 'medium', 'above-threshold finding keeps medium severity')
+  assert.ok(!material!.limitations.some(l => /reporting-date artifact/i.test(l)), 'above-threshold not flagged')
+})
+
+test('measurement: absent minimumMagnitude leaves behavior unchanged (medium severity)', () => {
+  const { tradelines, matches } = corpus([{ id: 'tiny', label: 'differ', balances: [10000, 10001] }])
+  const result = evaluateAnalysis({ rules: [rule], tradelines, confirmedMatches: matches, versions }) // rule has no minimumMagnitude
+  assert.equal(result.findings.length, 1)
+  assert.equal(result.findings[0]?.severity, 'medium', 'no threshold = no down-ranking (backward compatible)')
+})

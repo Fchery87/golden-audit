@@ -131,6 +131,7 @@ export type Rule = {
   effectiveFrom: string
   requiredInputs: string[]
   minimumConfidence: number
+  minimumMagnitude?: number
   classification: FindingClassification
   limitations: string[]
   authorityIds: Id[]

@@ -29,7 +29,7 @@ function publishRules(p: CreditAnalysisPlatform): string {
   const a = p.createAuthority('mr-r1', { citation: '15 USC 1681', jurisdiction: 'US-CA', effectiveFrom: '2020-01-01', permittedUse: 'education', limitations: ['educational'] })
   const m = p.createEducationModule('mr-r1', { title: 'Balance timing', body: 'Bureaus update on different dates.', jurisdiction: 'US-CA', effectiveFrom: '2020-01-01', permittedUse: 'education', limitations: ['verify'] })
   p.reviewGovernance('authority', a.id, 'mr-r1', 'approved', 'measurement'); p.reviewGovernance('module', m.id, 'mr-r1', 'approved', 'measurement')
-  const r = p.createRule('mr-r2', { name: 'cross-bureau-balance-difference', jurisdiction: 'US-CA', effectiveFrom: '2020-01-01', requiredInputs: ['balance'], minimumConfidence: 0.9, classification: 'verification-recommended', limitations: ['different update dates can explain a difference'], authorityIds: [a.id], educationModuleIds: [m.id], testCases: ['measurement'] })
+  const r = p.createRule('mr-r2', { name: 'cross-bureau-balance-difference', jurisdiction: 'US-CA', effectiveFrom: '2020-01-01', requiredInputs: ['balance'], minimumConfidence: 0.9, minimumMagnitude: 1000, classification: 'verification-recommended', limitations: ['different update dates can explain a difference'], authorityIds: [a.id], educationModuleIds: [m.id], testCases: ['measurement'] })
   p.reviewGovernance('rule', r.id, 'mr-r2', 'approved', 'measurement')
   return p.publishRuleset('mr-rel', 'US-CA', '2026-07-01')
 }
@@ -60,15 +60,17 @@ test('measurement: real-sample finding magnitude distribution (structure-only)',
     const analysis = p.runAnalysis(sessionId, report.id, publishRules(p), 'US-CA')
 
     const bins: Record<string, number> = { '<$10': 0, '$10-100': 0, '$100-1k': 0, '>$1k': 0 }
+    let downRanked = 0
     for (const f of analysis.findings) {
       assert.ok(f.evidence.length >= 2, 'a balance-difference finding must compare at least 2 bureaus')
       const vals = f.evidence.map(e => Number(e.value)).filter(n => Number.isFinite(n))
       assert.ok(vals.length >= 2, 'finding evidence must carry numeric balances')
       const mag = Math.max(...vals) - Math.min(...vals)
       bins[binOf(mag)] = (bins[binOf(mag)] ?? 0) + 1
+      if (f.severity === 'low') downRanked += 1
     }
     totalFindings += analysis.findings.length
-    rows.push(`  ${path.split('/').pop()?.padEnd(46)} tradelines=${String(report.tradelines.length).padStart(3)} matches=${String(proposed.length).padStart(3)} confirmed<=3=${String(confirmable.length).padStart(3)} withheld>3=${String(withheldCollisionSets).padStart(3)} findings=${String(analysis.findings.length).padStart(3)} | <$10(timing)=${bins['<$10']} $10-100=${bins['$10-100']} $100-1k=${bins['$100-1k']} >$1k(material)=${bins['>$1k']}`)
+    rows.push(`  ${path.split('/').pop()?.padEnd(46)} tradelines=${String(report.tradelines.length).padStart(3)} matches=${String(proposed.length).padStart(3)} confirmed<=3=${String(confirmable.length).padStart(3)} withheld>3=${String(withheldCollisionSets).padStart(3)} findings=${String(analysis.findings.length).padStart(3)} down-ranked=${String(downRanked).padStart(3)} | <$10(timing)=${bins['<$10']} $10-100=${bins['$10-100']} $100-1k=${bins['$100-1k']} >$1k(material)=${bins['>$1k']}`)
   }
   if (!checkedAny) return // all files absent (gitignored) -> pass vacuously in CI
   console.log('  [real-sample measurement]\n' + rows.join('\n'))

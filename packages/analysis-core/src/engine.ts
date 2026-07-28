@@ -17,6 +17,11 @@ export type EvaluableRule = {
   name: string
   status: 'draft' | 'approved' | 'rejected' | 'published' | 'disabled'
   minimumConfidence: number
+  /** Optional trivial-magnitude threshold (in minor units / cents). When the balance difference
+   *  is below this, the finding still fires but is down-ranked to 'low' severity and flagged as a
+   *  likely reporting-date artifact — it is NOT suppressed (CONTEXT.md: suppression is for
+   *  missing/low-confidence/ambiguous/non-comparable evidence, not 'real but trivial'). */
+  minimumMagnitude?: number
   classification: FindingClassification
   limitations: string[]
   authorityIds: string[]
@@ -63,20 +68,23 @@ const crossBureauBalanceDifference: RuleEvaluator = ({ rule, tradelinesById, con
     }
     const balances = new Set(lines.map(line => line.balance.normalized))
     if (balances.size > 1) {
+      const values = lines.map(line => line.balance.normalized ?? 0)
+      const magnitude = Math.max(...values) - Math.min(...values)
+      const trivial = rule.minimumMagnitude !== undefined && magnitude < rule.minimumMagnitude
       findings.push({
         classification: rule.classification,
         title: 'Bureau balances differ',
-        severity: 'medium',
+        severity: trivial ? 'low' : 'medium',
         confidence: Math.min(...lines.map(line => line.balance.confidence)),
         evidence: lines.map(line => ({ tradelineId: line.id, field: 'balance', value: line.balance.normalized ?? 0, source: line.balance.source })),
-        limitations: rule.limitations,
+        limitations: trivial ? [...rule.limitations, 'The balance difference is small and likely a reporting-date artifact'] : rule.limitations,
         alternativeExplanations: ['Bureaus may have received updates on different dates'],
         verificationDocuments: ['Recent creditor statement'],
         authorityIds: rule.authorityIds,
         educationModuleIds: rule.educationModuleIds,
         suggestedAction: 'Compare the displayed dates and verify the current balance with the creditor',
       })
-      audits.push({ ruleId: rule.id, outcome: 'triggered', reason: 'Comparable balances differ' })
+      audits.push({ ruleId: rule.id, outcome: 'triggered', reason: trivial ? 'Comparable balances differ (down-ranked: trivial magnitude)' : 'Comparable balances differ' })
     } else {
       audits.push({ ruleId: rule.id, outcome: 'skipped', reason: 'Comparable balances agree' })
     }
