@@ -4,14 +4,19 @@
 
 **Blocked by:** 12 — Pilot legal-conditions backlog (parser must be conditions-compliant); and **one external dependency**: a legitimate authorized report fixture for real bureau-format support (see "Sample data" below).
 
-**Status:** in-progress (extraction + detection machinery); blocked (real bureau-format wiring)
+**Status:** in-progress — machinery + redacted IdentityIQ field map done; real-format adapter next
 
 > Per ADR-0003, development toward the free invite-only pilot is sanctioned. The free pilot requires real parsing. This spike does NOT touch real consumer data — it proves machinery against a clearly-labeled fictitious fixture and defers real-format support to when an authorized fixture exists.
 
-## Sample data (the one external gate)
+## Provider scope (product decision)
 
-- Real bureau-format PDFs/HTML are **not public**. The only legitimate path to a real-format fixture is an **authorized consumer report** (e.g., your own from annualcreditreport.com) contributed as fixture #1 under written authorization (ticket 12).
-- Until that exists, the spike proves machinery against a **fictitious structured-HTML fixture** modeled on the documented credit-report layout. This is honestly labeled "fictitious fixture," not a real report.
+**IdentityIQ is the lead provider** for user uploads; supported in **both PDF and HTML**. Other providers later. Field map: `docs/parsers/identityiq-field-map.md`.
+
+## Sample data
+
+- A real **IdentityIQ** report is available locally in **both** formats: `docs/reports/Credit Report - IdentityIQ.pdf` (native-text, 8 pp) and `docs/reports/M68887092_11-14-2025.html` (AngularJS snapshot). Real PII — gitignored, never committed, processed locally only under ticket-12 controls.
+- ⚠️ **One sample → overfitting risk.** Adapter must be validated against **≥2 samples** before pilot trust.
+- A fictitious IdentityIQ-layout fixture remains the committed test target; real files used only for local, structure-only smoke tests (never printing/committing values).
 
 ## Acceptance criteria
 
@@ -21,8 +26,11 @@
 - [x] **Redaction applies before extraction** (inbound trust boundary, `packages/redaction`) — an SSN injected into the fixture cannot reach the parsed output.
 - [x] **End-to-end on fictitious structured markup**: fictitious-HTML fixture → parser → deterministic core (`packages/analysis-core`) → a real Finding, with no fictional JSON involved.
 - [x] **Field-precision test**: a deliberately misread/invented value fails the test.
-- [ ] **Real bureau-format support** (native-text PDF, ≥1 real provider/template) — blocked on an authorized fixture; flagged unsupported until then.
-- [ ] **Wiring into `platform.parseReport`** to replace the fictional JSON marker as the primary path — gated on the real-format fixture (rewiring now would either break existing tests or keep the fictional path primary).
+- [ ] **IdentityIQ PDF adapter** (coordinate-aware tri-bureau column extraction) — next slice; needs a coordinate-aware PDF text lib (regex over `pdftotext` fragments columns, confirmed empirically).
+- [ ] **IdentityIQ HTML adapter** (rendered-table extraction, skipping `{{ }}` template remnants).
+- [ ] **Detector signatures** for IdentityIQ-PDF and IdentityIQ-HTML; all other layouts flagged unsupported.
+- [ ] **Wiring into `platform.parseReport`** after the real adapter passes on the synthetic IdentityIQ fixture + local smoke test.
+- [ ] **≥2-sample validation** before pilot trust (overfitting gate).
 
 ## Notes
 - The existing `GOLDEN-AUDIT-REPORT:` JSON path is retained **only** as an explicitly-labeled "synthetic-fixture adapter" that existing tests use; it no longer masquerades as the real parser.

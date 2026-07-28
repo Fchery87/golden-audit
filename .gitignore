@@ -2,3 +2,7 @@ node_modules/
 dist/
 database/local/
 *.log
+
+# Real consumer credit reports — NEVER commit (real PII).
+# These are processed locally only, under the trust-boundary controls in ticket 12
+docs/reports/
