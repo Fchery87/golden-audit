@@ -32,3 +32,13 @@
 ## Note on the approval gate mechanism
 
 The application exposes a fail-closed pilot gate for seven approval areas (product, legal, privacy, security, operations, accessibility, vendor), tested in `tests/pilot-readiness.test.ts`. The records in `docs/pilot-approval-records.json` are **test fixtures that exercise the gate** — they are **not** real approvals. The gate is implemented; the approvals are not.
+
+## Progress note
+
+Foundational gate artifacts are now drafted in support of the remaining human approvals:
+- `docs/data-flow.md`
+- `docs/glba-wisp-skeleton.md`
+- `docs/privacy-notice-draft.md`
+- `docs/risk-assessment-template.md`
+
+These drafts support counsel / privacy / security review, but they do **not** satisfy the human-gated approval criteria by themselves.
