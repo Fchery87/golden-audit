@@ -87,10 +87,14 @@ export function FlowWizard() {
           <RotateCcw className="h-4 w-4" /> Reset session
         </Button>
         {error && (
-          <span className="flex items-center gap-2 font-mono text-xs text-negative">
+          <span role="alert" className="flex items-center gap-2 font-mono text-xs text-negative">
             <AlertCircle className="h-4 w-4" /> {error}
           </span>
         )}
+      </div>
+
+      <div className="sr-only" role="status" aria-live="polite">
+        {busy ? `Running step: ${busy}` : error ? `Step failed: ${error}` : snap.kickoff ? 'Analysis complete.' : 'Ready.'}
       </div>
 
       <ol className="mt-10">

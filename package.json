@@ -14,7 +14,8 @@
     "test": "tsx --test", 
     "db:migrate": "tsx scripts/migrate.ts",
     "health": "tsx scripts/smoke.ts",
-    "verify:pilot": "npm run typecheck && npm test && npm run db:migrate && npm run health"
+    "verify:pilot": "npm run typecheck && npm test && npm run db:migrate && npm run health",
+    "verify:release": "node scripts/verify-release.mjs"
   },
   "engines": {
     "node": ">=20"

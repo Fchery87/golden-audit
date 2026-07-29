@@ -18,3 +18,5 @@ export const applicationVersion = '0.1.0'
 export function createHealthStatus(service: ServiceName, now = new Date()): HealthStatus {
   return { service, status: 'ok', version: applicationVersion, checkedAt: now.toISOString() }
 }
+
+export * from './runtime-events.js'

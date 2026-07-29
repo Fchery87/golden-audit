@@ -1,7 +1,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { extname, join, normalize } from 'node:path'
-import { createHealthStatus } from '../../../packages/domain/src/index.js'
+import { createHealthStatus, createRuntimeEvent, type RuntimeEvent } from '../../../packages/domain/src/index.js'
 import {
   CreditAnalysisPlatform,
   type Jurisdiction,
@@ -9,20 +9,20 @@ import {
   type LaunchScope,
   type MatchGroup,
 } from '../../../packages/platform/src/index.js'
+import { appendRuntimeEvent, loadPlatformRuntime, savePlatformRuntime } from './runtime-store.js'
 
 const port = Number(process.env.WEB_PORT ?? 3000)
-const persistenceDir = process.env.PILOT_PERSISTENCE_DIR ?? '.scratch/runtime/web'
-const snapshotPath = `${persistenceDir}/platform-snapshot.json`
-if (!existsSync(persistenceDir)) mkdirSync(persistenceDir, { recursive: true })
+const runtimeDir = process.env.PILOT_PERSISTENCE_DIR ?? '.scratch/runtime/web'
 const platform = new CreditAnalysisPlatform()
 const approvalRecordPath = process.env.PILOT_APPROVAL_RECORD_PATH ?? 'docs/pilot-approval-records.json'
 const approvalRecords = JSON.parse(readFileSync(approvalRecordPath, 'utf8')) as PilotApprovalRecordFile
 const fixtureOnly = approvalRecords.scope === 'test-fixture-only' || /fixture/i.test(approvalRecords.status) || /not approvals?/i.test(approvalRecords._warning ?? '')
-let hydratedLaunchScope = platform.hydrateLaunchScope(approvalRecords)
-if (existsSync(snapshotPath)) {
-  platform.loadSnapshot(snapshotPath)
+let hydratedLaunchScope: LaunchScope | undefined
+const runtimeLoaded = loadPlatformRuntime(platform, runtimeDir)
+if (runtimeLoaded) {
   hydratedLaunchScope = platform.getLaunchScope()
 } else {
+  hydratedLaunchScope = platform.hydrateLaunchScope(approvalRecords)
   platform.loadPilotApprovals(approvalRecords)
   bootstrapPublishedRulesets(platform)
   persistPlatform()
@@ -108,7 +108,20 @@ type ConsumerFlowSummary = {
 type CompleteAnalysisBody = { jurisdiction?: string }
 
 function persistPlatform(): void {
-  platform.saveSnapshot(snapshotPath)
+  try {
+    savePlatformRuntime(platform, runtimeDir)
+  } catch (error) {
+    recordRuntimeEvent(createRuntimeEvent({
+      kind: 'persistence-failure',
+      at: new Date().toISOString(),
+      message: error instanceof Error ? error.message : 'Unexpected persistence failure',
+    }))
+    throw error
+  }
+}
+
+function recordRuntimeEvent(event: RuntimeEvent): void {
+  appendRuntimeEvent(runtimeDir, event)
 }
 
 function bootstrapPublishedRulesets(app: CreditAnalysisPlatform): Partial<Record<Jurisdiction, string>> {
@@ -267,6 +280,7 @@ async function handleRegister(request: IncomingMessage, response: ServerResponse
   const body = await readJsonBody(request) as ConsumerRegisterBody
   const account = platform.register({ email: body.email, password: body.password })
   persistPlatform()
+  recordRuntimeEvent(createRuntimeEvent({ kind: 'pilot-transition', at: new Date().toISOString(), transition: 'register', message: `registered ${account.userId}` }))
   respondJson(response, 201, { sessionId: account.sessionId, userId: account.userId, launchScope: launchScope ?? null, onboarding: onboardingPayload(launchScope) })
 }
 
@@ -307,6 +321,7 @@ async function handleUploadComplete(request: IncomingMessage, response: ServerRe
     mediaType: body.mediaType,
     bytes: Buffer.from(body.contentBase64, 'base64'),
   })
+  recordRuntimeEvent(createRuntimeEvent({ kind: 'upload-complete', at: new Date().toISOString(), uploadId: upload.id, message: 'upload completed successfully' }))
   respondJson(response, 201, upload)
 }
 
@@ -314,6 +329,11 @@ async function handleKickoffAnalysis(request: IncomingMessage, response: ServerR
   const sessionId = getSessionId(request)
   const body = await readJsonBody(request) as AnalysisKickoffBody
   const result = kickoffAnalysisFlow(sessionId, uploadId, body)
+  if (result.status === 'analysis-complete') {
+    recordRuntimeEvent(createRuntimeEvent({ kind: 'analysis-complete', at: new Date().toISOString(), reportId: result.reportId, uploadId, message: 'analysis completed successfully' }))
+  } else {
+    recordRuntimeEvent(createRuntimeEvent({ kind: 'pilot-transition', at: new Date().toISOString(), transition: 'match-review-required', message: `manual review required for ${result.reportId}` }))
+  }
   respondJson(response, result.status === 'analysis-complete' ? 201 : 202, result)
 }
 
@@ -484,6 +504,7 @@ const server = createServer(async (request, response) => {
     respondJson(response, 404, { error: 'Not found' })
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unexpected error'
+    recordRuntimeEvent(createRuntimeEvent({ kind: 'release-gate-failure', at: new Date().toISOString(), gate: `${request.method ?? 'UNKNOWN'} ${(request.url ?? '/')}` , message }))
     respondJson(response, 400, { error: message })
   }
 })

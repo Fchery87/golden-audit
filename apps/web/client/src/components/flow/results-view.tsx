@@ -1,5 +1,5 @@
 import * as React from 'react'
-import { Loader2, AlertCircle, FileDown, Check } from 'lucide-react'
+import { Loader2, AlertCircle, FileDown, Check, RotateCcw } from 'lucide-react'
 import {
   api,
   type KickoffResult,
@@ -28,6 +28,7 @@ function Reading({ consumerReportId, exportId }: { consumerReportId: string; exp
   const [exportArtifact, setExportArtifact] = React.useState<ExportArtifact | null>(null)
   const [error, setError] = React.useState<string | null>(null)
   const [showExport, setShowExport] = React.useState(false)
+  const [retryKey, setRetryKey] = React.useState(0)
 
   React.useEffect(() => {
     let cancelled = false
@@ -46,20 +47,25 @@ function Reading({ consumerReportId, exportId }: { consumerReportId: string; exp
     return () => {
       cancelled = true
     }
-  }, [consumerReportId, exportId])
+  }, [consumerReportId, exportId, retryKey])
 
   return (
     <section className="mt-16 animate-fade-in border-t border-rule pt-12">
       <Header index="04" label="Your reading" />
 
       {error && (
-        <p className="mt-6 flex items-center gap-2 font-mono text-xs text-negative">
-          <AlertCircle className="h-4 w-4" /> {error}
-        </p>
+        <div className="mt-6 flex items-center gap-4">
+          <p role="alert" className="flex items-center gap-2 font-mono text-xs text-negative">
+            <AlertCircle className="h-4 w-4" /> {error}
+          </p>
+          <Button size="sm" variant="outline" onClick={() => setRetryKey((k) => k + 1)}>
+            <RotateCcw /> Retry
+          </Button>
+        </div>
       )}
 
       {!report && !error && (
-        <p className="mt-6 flex items-center gap-2 font-mono text-xs text-muted-foreground">
+        <p role="status" aria-live="polite" className="mt-6 flex items-center gap-2 font-mono text-xs text-muted-foreground">
           <Loader2 className="h-4 w-4 animate-spin" /> Reading the report…
         </p>
       )}

@@ -12,8 +12,9 @@ export default function App() {
   return (
     <ThemeProvider>
       <div className="min-h-screen">
+        <a href="#content" className="skip-link">Skip to content</a>
         <Masthead onBack={view === 'flow' ? () => setView('landing') : undefined} />
-        <main className="mx-auto max-w-2xl px-6 pb-28 pt-16 sm:pt-24">
+        <main id="content" tabIndex={-1} className="mx-auto max-w-2xl px-6 pb-28 pt-16 outline-none sm:pt-24">
           {view === 'landing' ? (
             <>
               <Hero onBegin={() => setView('flow')} />
