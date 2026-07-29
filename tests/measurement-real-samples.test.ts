@@ -47,6 +47,16 @@ test('measurement: real-sample finding magnitude distribution (structure-only)',
     if (!existsSync(path)) continue
     checkedAny = true
     const p = new CreditAnalysisPlatform()
+    p.configureLaunchScope({
+      mode: 'one-state-free-pilot',
+      approvedStates: ['US-CA'],
+      provisionalSelectedState: 'US-CA',
+      stateSelectionEvidenceReference: 'docs/one-state-launch-selection-memo.md',
+      availabilityClaim: 'Pilot currently limited to approved states only.',
+      pricingMode: 'free-pilot-only',
+      nationwideStatus: 'not-cleared',
+      notes: 'Analysis-only, educational, consumer-uploaded, consumer-only boundary.',
+    })
     const { sessionId } = p.register({ email: 'measure@example.com', password })
     const ws = p.recordConsent(sessionId, consent); p.acceptAuthorization(sessionId)
     const init = p.initializeUpload(sessionId, ws.id)

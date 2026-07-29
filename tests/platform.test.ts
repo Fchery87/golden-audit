@@ -49,6 +49,16 @@ function hasBin(bin: string): boolean { try { execSync(`command -v ${bin}`, { st
 
 function setup() {
   const platform = new CreditAnalysisPlatform()
+  platform.configureLaunchScope({
+    mode: 'one-state-free-pilot',
+    approvedStates: ['US-CA'],
+    provisionalSelectedState: 'US-CA',
+    stateSelectionEvidenceReference: 'docs/one-state-launch-selection-memo.md',
+    availabilityClaim: 'Pilot currently limited to approved states only.',
+    pricingMode: 'free-pilot-only',
+    nationwideStatus: 'not-cleared',
+    notes: 'Analysis-only, educational, consumer-uploaded, consumer-only boundary.',
+  })
   const account = platform.register({ email: 'consumer@example.com', password })
   const workspace = platform.recordConsent(account.sessionId, consent)
   platform.acceptAuthorization(account.sessionId) // FCRA counsel Q-L3: written authorization before processing
@@ -85,6 +95,25 @@ test('ticket 02: account consent gate, session revocation, and tenant isolation 
   assert.throws(() => platform.getWorkspace(sessionId, workspace.id), /Authentication required/)
   const signedIn = platform.signIn({ email: 'consumer@example.com', password })
   assert.equal(platform.getWorkspace(signedIn, workspace.id).id, workspace.id)
+})
+
+test('launch scope: consent requires an approved state and configured launch scope', () => {
+  const platform = new CreditAnalysisPlatform()
+  const { sessionId } = platform.register({ email: 'scope@example.com', password })
+  assert.throws(() => platform.recordConsent(sessionId, consent), /Launch scope is not configured/)
+  platform.configureLaunchScope({
+    mode: 'one-state-free-pilot',
+    approvedStates: ['US-CA'],
+    provisionalSelectedState: 'US-CA',
+    stateSelectionEvidenceReference: 'docs/one-state-launch-selection-memo.md',
+    availabilityClaim: 'Pilot currently limited to approved states only.',
+    pricingMode: 'free-pilot-only',
+    nationwideStatus: 'not-cleared',
+    notes: 'Analysis-only, educational, consumer-uploaded, consumer-only boundary.',
+  })
+  assert.doesNotThrow(() => platform.recordConsent(sessionId, consent))
+  const other = platform.register({ email: 'scope-other@example.com', password })
+  assert.throws(() => platform.recordConsent(other.sessionId, { ...consent, residence: 'US-NY', analysisJurisdiction: 'US-NY' }), /Jurisdiction is not enabled for the pilot/)
 })
 
 test('ticket 03: private ingestion validates, quarantines, expires, and deduplicates safely', () => {

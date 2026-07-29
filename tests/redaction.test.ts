@@ -25,6 +25,16 @@ test('redaction: containsUnredactedIdentifier detects residual identifiers (stat
 
 test('trust boundary: an SSN injected into the upload cannot reach the parsed report, findings, or audit', () => {
   const platform = new CreditAnalysisPlatform()
+  platform.configureLaunchScope({
+    mode: 'one-state-free-pilot',
+    approvedStates: ['US-CA'],
+    provisionalSelectedState: 'US-CA',
+    stateSelectionEvidenceReference: 'docs/one-state-launch-selection-memo.md',
+    availabilityClaim: 'Pilot currently limited to approved states only.',
+    pricingMode: 'free-pilot-only',
+    nationwideStatus: 'not-cleared',
+    notes: 'Analysis-only, educational, consumer-uploaded, consumer-only boundary.',
+  })
   const { sessionId } = platform.register({ email: 'redact@example.com', password: 'correct horse battery staple' })
   const workspace = platform.recordConsent(sessionId, consent)
   platform.acceptAuthorization(sessionId)

@@ -10,8 +10,10 @@ import type { Analysis as CoreAnalysis, Finding, FindingClassification, RuleAudi
 
 export type { Finding, FindingClassification, RuleAudit, SourceReference }
 export type Id = string
-export type Jurisdiction = 'US-CA'
+export type Jurisdiction = `US-${string}`
 export type Bureau = 'equifax' | 'experian' | 'transunion'
+export type LaunchScopeMode = 'one-state-free-pilot' | 'small-reviewed-state-subset' | 'launch-paused-pending-review'
+export type NationwideStatus = 'not-cleared' | 'goal-only' | 'state-by-state-review' | 'paused-pending-review'
 export type ReviewDecision = 'confirmed' | 'corrected' | 'unknown' | 'not-shown'
 
 export type Consent = {
@@ -44,6 +46,17 @@ export const RETENTION_POLICY = {
 } as const
 
 export type AuthorizationRecord = { id: Id; userId: Id; version: string; acceptedAt: string }
+export type LaunchScope = {
+  mode: LaunchScopeMode
+  approvedStates: Jurisdiction[]
+  provisionalSelectedState?: Jurisdiction
+  stateSelectionEvidenceReference: string
+  availabilityClaim: string
+  pricingMode: 'free-pilot-only'
+  nationwideStatus: NationwideStatus
+  notes: string
+  configuredAt: string
+}
 
 type User = { id: Id; email: string; passwordHash: string; passwordSalt: string; consent?: Consent }
 type Session = { id: Id; userId: Id; revokedAt?: string }
@@ -163,7 +176,7 @@ export type DeletionJob = { id: Id; userId: Id; status: 'pending-provider' | 'co
 export type AuditEvent = { type: string; actorId: Id; subjectId: Id; at: string; metadata: Record<string, string> }
 export type PilotApprovalArea = 'product' | 'legal' | 'privacy' | 'security' | 'operations' | 'accessibility' | 'vendor'
 export type PilotApproval = { area: PilotApprovalArea; approver: string; evidenceReference: string; approvedAt: string }
-export type PilotGate = { ready: boolean; missing: PilotApprovalArea[]; approvals: PilotApproval[] }
+export type PilotGate = { ready: boolean; missing: PilotApprovalArea[]; approvals: PilotApproval[]; launchScope?: LaunchScope; missingLaunchScope: boolean }
 
 const now = () => new Date().toISOString()
 const hashPassword = (password: string, salt: string) => scryptSync(password, salt, 32).toString('hex')
@@ -194,6 +207,7 @@ export class CreditAnalysisPlatform {
   private rawUploadBytes = new Map<Id, Uint8Array>()
   private reviewers = new Map<Id, Reviewer>()
   private pilotApprovals = new Map<PilotApprovalArea, PilotApproval>()
+  private launchScope?: LaunchScope
   readonly auditEvents: AuditEvent[] = []
 
   register(input: { email: string; password: string }): { userId: Id; sessionId: Id } {
@@ -222,7 +236,8 @@ export class CreditAnalysisPlatform {
   recordConsent(sessionId: Id, input: Omit<Consent, 'acceptedAt'>): Workspace {
     const userId = this.requireSession(sessionId)
     if (!input.adultUSConsumer || !input.authorizedReportUse || !input.educationalLimitations || !input.sensitiveDataHandling) throw new Error('All required acknowledgements are required')
-    if (input.residence !== 'US-CA' || input.analysisJurisdiction !== 'US-CA') throw new Error('Jurisdiction is not enabled for the pilot')
+    if (!this.launchScope) throw new Error('Launch scope is not configured for the pilot')
+    if (!this.launchScope.approvedStates.includes(input.residence) || !this.launchScope.approvedStates.includes(input.analysisJurisdiction)) throw new Error('Jurisdiction is not enabled for the pilot')
     const user = this.users.get(userId); if (!user) throw new Error('User not found')
     user.consent = { ...input, acceptedAt: now() }
     const workspace = { id: randomUUID(), userId, createdAt: now() }; this.workspaces.set(workspace.id, workspace)
@@ -240,6 +255,23 @@ export class CreditAnalysisPlatform {
   getAuthorization(sessionId: Id): AuthorizationRecord { const userId = this.requireSession(sessionId); const id = this.authorizationByUser.get(userId); const record = id ? this.authorizations.get(id) : undefined; if (!record) throw new Error('No written authorization on record'); return structuredClone(record) }
   getRetentionPolicy(): typeof RETENTION_POLICY { return RETENTION_POLICY }
   private requireAuthorization(userId: Id): void { if (!this.authorizationByUser.has(userId)) throw new Error('Written authorization required before processing') }
+
+  configureLaunchScope(input: Omit<LaunchScope, 'configuredAt'>): LaunchScope {
+    if (input.mode === 'one-state-free-pilot') {
+      if (input.approvedStates.length !== 1) throw new Error('One-state pilot requires exactly one approved state')
+      if (!input.provisionalSelectedState || input.provisionalSelectedState !== input.approvedStates[0]) throw new Error('One-state pilot requires a matching provisional selected state')
+    }
+    if (!input.approvedStates.length && input.mode !== 'launch-paused-pending-review') throw new Error('At least one approved state is required unless launch is paused')
+    if (!input.stateSelectionEvidenceReference.trim() || !input.availabilityClaim.trim() || !input.notes.trim()) throw new Error('Launch scope requires evidence, availability claim, and notes')
+    const scope: LaunchScope = { ...input, approvedStates: [...new Set(input.approvedStates)], configuredAt: now() }
+    this.launchScope = scope
+    this.audit('launch-scope-configured', 'system', scope.provisionalSelectedState ?? 'launch-scope', { mode: scope.mode, approvedStates: scope.approvedStates.join(',') })
+    return structuredClone(scope)
+  }
+  getLaunchScope(): LaunchScope {
+    if (!this.launchScope) throw new Error('Launch scope is not configured for the pilot')
+    return structuredClone(this.launchScope)
+  }
 
   getWorkspace(sessionId: Id, workspaceId: Id): Workspace { const userId = this.requireSession(sessionId); const workspace = this.workspaces.get(workspaceId); if (!workspace || workspace.userId !== userId) throw new Error('Not found'); return structuredClone(workspace) }
 
@@ -422,9 +454,19 @@ export class CreditAnalysisPlatform {
   getPilotGate(): PilotGate {
     const required: PilotApprovalArea[] = ['product', 'legal', 'privacy', 'security', 'operations', 'accessibility', 'vendor']
     const missing = required.filter(area => !this.pilotApprovals.has(area))
-    return { ready: missing.length === 0, missing, approvals: [...this.pilotApprovals.values()].map(item => structuredClone(item)) }
+    return {
+      ready: missing.length === 0 && !!this.launchScope,
+      missing,
+      approvals: [...this.pilotApprovals.values()].map(item => structuredClone(item)),
+      ...(this.launchScope ? { launchScope: structuredClone(this.launchScope) } : {}),
+      missingLaunchScope: !this.launchScope,
+    }
   }
-  assertRealConsumerPilotReady(): void { const gate = this.getPilotGate(); if (!gate.ready) throw new Error(`Pilot approvals incomplete: ${gate.missing.join(', ')}`) }
+  assertRealConsumerPilotReady(): void {
+    const gate = this.getPilotGate()
+    if (gate.missingLaunchScope) throw new Error('Pilot launch scope is not configured')
+    if (!gate.ready) throw new Error(`Pilot approvals incomplete: ${gate.missing.join(', ')}`)
+  }
   getAuditEvents(sessionId: Id): AuditEvent[] { const userId = this.requireSession(sessionId); return this.auditEvents.filter(event => event.actorId === userId).map(event => structuredClone(event)) }
   private requireSession(sessionId: Id): Id { const session = this.sessions.get(sessionId); if (!session || session.revokedAt) throw new Error('Authentication required'); return session.userId }
   private audit(type: string, actorId: Id, subjectId: Id, metadata: Record<string, string> = {}): void { this.auditEvents.push({ type, actorId, subjectId, at: now(), metadata }) }

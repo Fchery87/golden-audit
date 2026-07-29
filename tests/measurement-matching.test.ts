@@ -19,6 +19,16 @@ function hasBin(bin: string): boolean { try { execSync(`command -v ${bin}`, { st
 function maskAccount(value: string): string { return `••••${value.replace(/\D/g, '').slice(-4)}` }
 function setup() {
   const platform = new CreditAnalysisPlatform()
+  platform.configureLaunchScope({
+    mode: 'one-state-free-pilot',
+    approvedStates: ['US-CA'],
+    provisionalSelectedState: 'US-CA',
+    stateSelectionEvidenceReference: 'docs/one-state-launch-selection-memo.md',
+    availabilityClaim: 'Pilot currently limited to approved states only.',
+    pricingMode: 'free-pilot-only',
+    nationwideStatus: 'not-cleared',
+    notes: 'Analysis-only, educational, consumer-uploaded, consumer-only boundary.',
+  })
   const account = platform.register({ email: 'measure-matching@example.com', password })
   const workspace = platform.recordConsent(account.sessionId, consent)
   platform.acceptAuthorization(account.sessionId)

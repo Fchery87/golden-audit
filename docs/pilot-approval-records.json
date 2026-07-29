@@ -3,6 +3,16 @@
   "scope": "test-fixture-only",
   "status": "fixture-not-an-approval",
   "productionLaunch": "not-authorized-fixtures-only",
+  "launchScope": {
+    "mode": "one-state-free-pilot",
+    "approvedStates": ["US-CA"],
+    "provisionalSelectedState": "US-CA",
+    "stateSelectionEvidenceReference": "fixture — not a real approval",
+    "availabilityClaim": "fixture — not a real approval",
+    "pricingMode": "free-pilot-only",
+    "nationwideStatus": "not-cleared",
+    "notes": "fixture — not a real approval"
+  },
   "approvals": [
     {"area":"product","approver":"fixture:product","evidenceReference":"fixture — not a real approval"},
     {"area":"legal","approver":"fixture:legal","evidenceReference":"fixture — not a real approval"},

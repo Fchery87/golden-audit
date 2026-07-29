@@ -17,6 +17,16 @@ const reportInput = {
 const markerBytes = () => Buffer.from(`<html>GOLDEN-AUDIT-REPORT:${JSON.stringify(reportInput)}</body></html>`)
 
 function onboard(platform: CreditAnalysisPlatform, email: string) {
+  platform.configureLaunchScope({
+    mode: 'one-state-free-pilot',
+    approvedStates: ['US-CA'],
+    provisionalSelectedState: 'US-CA',
+    stateSelectionEvidenceReference: 'docs/one-state-launch-selection-memo.md',
+    availabilityClaim: 'Pilot currently limited to approved states only.',
+    pricingMode: 'free-pilot-only',
+    nationwideStatus: 'not-cleared',
+    notes: 'Analysis-only, educational, consumer-uploaded, consumer-only boundary.',
+  })
   const { sessionId } = platform.register({ email, password })
   const workspace = platform.recordConsent(sessionId, consent)
   platform.acceptAuthorization(sessionId)
@@ -26,6 +36,16 @@ function onboard(platform: CreditAnalysisPlatform, email: string) {
 // Q-L3 — Authorization: written authorization expressly accepted before any processing.
 test('Q-L3: processing is gated on written authorization (completeUpload throws until accepted)', () => {
   const platform = new CreditAnalysisPlatform()
+  platform.configureLaunchScope({
+    mode: 'one-state-free-pilot',
+    approvedStates: ['US-CA'],
+    provisionalSelectedState: 'US-CA',
+    stateSelectionEvidenceReference: 'docs/one-state-launch-selection-memo.md',
+    availabilityClaim: 'Pilot currently limited to approved states only.',
+    pricingMode: 'free-pilot-only',
+    nationwideStatus: 'not-cleared',
+    notes: 'Analysis-only, educational, consumer-uploaded, consumer-only boundary.',
+  })
   const { sessionId } = platform.register({ email: 'auth@example.com', password })
   const workspace = platform.recordConsent(sessionId, consent)
   const init = platform.initializeUpload(sessionId, workspace.id)
@@ -38,6 +58,7 @@ test('Q-L3: processing is gated on written authorization (completeUpload throws 
   assert.equal(retained.version, AUTHORIZATION_VERSION); assert.equal(retained.acceptedAt, auth.acceptedAt)
   assert.ok(platform.getAuditEvents(sessionId).some(e => e.type === 'authorization-accepted'))
 })
+
 
 test('Q-L3/L1/pricing: written authorization discloses subject-only delivery, retention, and the free / no-sale / no-ad / no-training terms', () => {
   const text = AUTHORIZATION_TEXT.toLowerCase()
