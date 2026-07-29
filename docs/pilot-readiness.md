@@ -47,4 +47,4 @@ For each supported provider and storage adapter, demonstrate deletion of active 
 
 The application exposes a fail-closed pilot gate for these approval areas: `product`, `legal`, `privacy`, `security`, `operations`, `accessibility`, and `vendor`. Each approval requires an accountable approver and an evidence reference; the controlled pilot cannot be marked ready until all seven are recorded. The launch scope must also be explicitly configured (current recommended posture: one-state free pilot).
 
-The seven accountable approvals are recorded in `docs/pilot-approval-records.json`. The implementation is complete and verified for the controlled-pilot contract.
+`docs/pilot-approval-records.json` remains a **test fixture**, not a source of real approvals. It may be used to hydrate launch-scope metadata for local/runtime gating, but accountable human approvals must still be recorded separately before any real pilot can be considered ready.

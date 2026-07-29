@@ -20,6 +20,11 @@ npm run build
 
 Run an individual boundary with `npm run dev:web`, `npm run dev:worker`, or `npm run dev:admin`. The default ports are 3000, 3001, and 3002 respectively.
 
+The web boundary now exposes:
+- `GET /health` — health status
+- `GET /pilot-availability?state=CA` — approved-state gating response derived from the configured launch scope
+- `GET /` — onboarding-state copy and current pilot-scope summary for the app shell
+
 ## Workspace boundaries
 
 - `apps/web`: consumer web boundary.

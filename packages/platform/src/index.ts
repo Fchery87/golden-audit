@@ -177,6 +177,23 @@ export type AuditEvent = { type: string; actorId: Id; subjectId: Id; at: string;
 export type PilotApprovalArea = 'product' | 'legal' | 'privacy' | 'security' | 'operations' | 'accessibility' | 'vendor'
 export type PilotApproval = { area: PilotApprovalArea; approver: string; evidenceReference: string; approvedAt: string }
 export type PilotGate = { ready: boolean; missing: PilotApprovalArea[]; approvals: PilotApproval[]; launchScope?: LaunchScope; missingLaunchScope: boolean }
+export type PilotApprovalRecordFile = {
+  _warning?: string
+  scope: string
+  status: string
+  productionLaunch?: string
+  launchScope?: {
+    mode: LaunchScopeMode
+    approvedStates: string[]
+    provisionalSelectedState?: string
+    stateSelectionEvidenceReference: string
+    availabilityClaim: string
+    pricingMode: 'free-pilot-only'
+    nationwideStatus: NationwideStatus
+    notes: string
+  }
+  approvals: Array<{ area: PilotApprovalArea; approver: string; evidenceReference: string }>
+}
 
 const now = () => new Date().toISOString()
 const hashPassword = (password: string, salt: string) => scryptSync(password, salt, 32).toString('hex')
@@ -271,6 +288,37 @@ export class CreditAnalysisPlatform {
   getLaunchScope(): LaunchScope {
     if (!this.launchScope) throw new Error('Launch scope is not configured for the pilot')
     return structuredClone(this.launchScope)
+  }
+
+  hydrateLaunchScope(input: PilotApprovalRecordFile): LaunchScope | undefined {
+    if (!input.launchScope) return undefined
+    const approvedStates = input.launchScope.approvedStates.map(state => state.startsWith('US-') ? state as Jurisdiction : `US-${state}` as Jurisdiction)
+    const provisionalSelectedState = input.launchScope.provisionalSelectedState
+      ? (input.launchScope.provisionalSelectedState.startsWith('US-') ? input.launchScope.provisionalSelectedState as Jurisdiction : `US-${input.launchScope.provisionalSelectedState}` as Jurisdiction)
+      : undefined
+    const scope = this.configureLaunchScope({
+      mode: input.launchScope.mode,
+      approvedStates,
+      ...(provisionalSelectedState ? { provisionalSelectedState } : {}),
+      stateSelectionEvidenceReference: input.launchScope.stateSelectionEvidenceReference,
+      availabilityClaim: input.launchScope.availabilityClaim,
+      pricingMode: input.launchScope.pricingMode,
+      nationwideStatus: input.launchScope.nationwideStatus,
+      notes: input.launchScope.notes,
+    })
+    return scope
+  }
+
+  loadPilotApprovals(input: PilotApprovalRecordFile): { launchScope?: LaunchScope; approvalsLoaded: number; fixtureOnly: boolean } {
+    const scope = this.hydrateLaunchScope(input)
+    const fixtureOnly = input.scope === 'test-fixture-only' || /fixture/i.test(input.status) || /not approvals?/i.test(input._warning ?? '')
+    if (fixtureOnly) return { ...(scope ? { launchScope: scope } : {}), approvalsLoaded: 0, fixtureOnly }
+    let approvalsLoaded = 0
+    for (const approval of input.approvals) {
+      this.recordPilotApproval({ area: approval.area, approver: approval.approver, evidenceReference: approval.evidenceReference })
+      approvalsLoaded += 1
+    }
+    return { ...(scope ? { launchScope: scope } : {}), approvalsLoaded, fixtureOnly }
   }
 
   getWorkspace(sessionId: Id, workspaceId: Id): Workspace { const userId = this.requireSession(sessionId); const workspace = this.workspaces.get(workspaceId); if (!workspace || workspace.userId !== userId) throw new Error('Not found'); return structuredClone(workspace) }

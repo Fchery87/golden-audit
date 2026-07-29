@@ -63,6 +63,19 @@ test('ticket 11: approval record file is explicitly a test fixture, not a real a
 })
 
 
+test('ticket 11: approval record fixture can hydrate launch scope without being treated as a real approval source', async () => {
+  const platform = new CreditAnalysisPlatform()
+  const records = JSON.parse(await readFile('docs/pilot-approval-records.json', 'utf8')) as { _warning: string; scope: string; status: string; productionLaunch: string; launchScope?: { mode: 'one-state-free-pilot'; approvedStates: string[]; provisionalSelectedState?: string; stateSelectionEvidenceReference: string; availabilityClaim: string; pricingMode: 'free-pilot-only'; nationwideStatus: 'not-cleared'; notes: string }; approvals: Array<{ area: 'product' | 'legal' | 'privacy' | 'security' | 'operations' | 'accessibility' | 'vendor'; approver: string; evidenceReference: string }> }
+  const loaded = platform.loadPilotApprovals(records)
+  assert.equal(loaded.fixtureOnly, true)
+  assert.equal(loaded.approvalsLoaded, 0)
+  assert.equal(loaded.launchScope?.provisionalSelectedState, 'US-CA')
+  assert.equal(platform.getPilotGate().ready, false)
+  assert.equal(platform.getPilotGate().missingLaunchScope, false)
+  assert.deepEqual(platform.getPilotGate().missing, ['product', 'legal', 'privacy', 'security', 'operations', 'accessibility', 'vendor'])
+})
+
+
 test('ticket 11: readiness document contains all required runbooks, segmented quality, vendor, accessibility, deletion, and approval gates', async () => {
   const document = await readFile('docs/pilot-readiness.md', 'utf8')
   for (const phrase of ['Parser regression', 'Malware quarantine', 'Model/provider outage', 'Unsafe model output', 'Cross-tenant alert', 'Deletion failure', 'Legal/content disablement', 'Credential exposure', 'Rollback', 'WCAG 2.2 AA', 'data residency', 'backup lifecycle', 'account-match precision', 'finding positive predictive value', 'supported provider', 'Required human approvals']) assert.match(document, new RegExp(phrase.replace('/', '\\/'), 'i'))
