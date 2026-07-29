@@ -1,15 +1,14 @@
 import * as React from 'react'
-import { CheckCircle2, AlertCircle, Loader2 } from 'lucide-react'
+import { CheckCircle2, AlertCircle, Loader2, ArrowRight } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { getAvailability, type PilotAvailability } from '@/lib/api'
+import { api, type PilotAvailability } from '@/lib/api'
 
-export function Hero() {
+export function Hero({ onBegin }: { onBegin: () => void }) {
   return (
     <section className="animate-fade-in">
       <p className="eyebrow">№ 001 · California · Invite-only</p>
       <h1 className="mt-7 font-serif text-[2.6rem] leading-[1.06] tracking-tight sm:text-6xl sm:leading-[1.04]">
-        Your three credit bureaus rarely{' '}
-        <span className="italic text-primary">agree.</span>
+        Your three credit bureaus rarely <span className="italic text-primary">agree.</span>
       </h1>
       <p className="mt-7 max-w-xl text-lg leading-relaxed">
         Upload a report. We read it carefully and tell you — plainly, in writing — where Equifax,
@@ -22,6 +21,12 @@ export function Hero() {
       <div className="mt-10">
         <AvailabilityCheck />
       </div>
+
+      <div className="mt-8 border-t border-rule pt-8">
+        <Button size="lg" onClick={onBegin}>
+          Begin the reading <ArrowRight className="h-4 w-4" />
+        </Button>
+      </div>
     </section>
   )
 }
@@ -29,13 +34,16 @@ export function Hero() {
 function AvailabilityCheck() {
   const [state, setState] = React.useState('CA')
   const [status, setStatus] = React.useState<
-    { kind: 'idle' } | { kind: 'loading' } | { kind: 'ok'; data: PilotAvailability } | { kind: 'error'; message: string }
+    | { kind: 'idle' }
+    | { kind: 'loading' }
+    | { kind: 'ok'; data: PilotAvailability }
+    | { kind: 'error'; message: string }
   >({ kind: 'idle' })
 
   async function check() {
     setStatus({ kind: 'loading' })
     try {
-      const data = await getAvailability(state.trim().toUpperCase())
+      const data = await api.getAvailability(state.trim().toUpperCase())
       setStatus({ kind: 'ok', data })
     } catch (error) {
       setStatus({ kind: 'error', message: error instanceof Error ? error.message : 'Unexpected error' })
@@ -57,8 +65,7 @@ function AvailabilityCheck() {
         <Button size="lg" onClick={check} disabled={status.kind === 'loading'}>
           {status.kind === 'loading' ? (
             <>
-              <Loader2 className="h-4 w-4 animate-spin" />
-              Checking
+              <Loader2 className="h-4 w-4 animate-spin" /> Checking
             </>
           ) : (
             <>Check availability →</>
@@ -81,13 +88,16 @@ function AvailabilityResult({
     | { kind: 'error'; message: string }
 }) {
   if (status.kind === 'idle' || status.kind === 'loading') {
-    return <p className="mt-5 min-h-[1.5rem] text-sm text-muted-foreground">Available in California, free, by invitation.</p>
+    return (
+      <p className="mt-5 min-h-[1.5rem] text-sm text-muted-foreground">
+        Available in California, free, by invitation.
+      </p>
+    )
   }
   if (status.kind === 'error') {
     return (
       <p className="mt-5 flex items-center gap-2 text-sm text-negative">
-        <AlertCircle className="h-4 w-4" />
-        {status.message}
+        <AlertCircle className="h-4 w-4" /> {status.message}
       </p>
     )
   }
@@ -97,7 +107,8 @@ function AvailabilityResult({
       <p className="mt-5 flex items-center gap-2 text-sm">
         <CheckCircle2 className="h-4 w-4 text-positive" />
         <span>
-          Available in <span className="font-medium tnum">{data.stateChecked}</span> · free · invite-only.
+          Available in <span className="font-medium tnum">{data.stateChecked}</span> · free ·
+          invite-only.
         </span>
       </p>
     )
