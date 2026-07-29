@@ -6,9 +6,9 @@ This document records the executable and human approval gates for the initial Ca
 
 Run `npm run verify:pilot`. The suite covers:
 
-- authentication, revoked sessions, tenant isolation, and IDOR-style cross-tenant access;
+- authentication, revoked sessions, tenant isolation, approved-state launch-scope gating, and IDOR-style cross-tenant access;
 - upload authorization expiry, file-signature validation, resource limits, malware/prompt-content quarantine, and private artifact handling;
-- provenance-preserving parsing, masking, deterministic matching/analysis, suppression, reproducibility, exports, deletion, and narration fallback;
+- provenance-preserving parsing, masking, deterministic matching/analysis, suppression, reproducibility, exports, deletion, narration fallback, and the smallest web-boundary consumer flow;
 - structured audit coverage and telemetry redaction checks.
 
 ## Accessibility target
