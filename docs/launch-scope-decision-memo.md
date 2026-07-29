@@ -127,12 +127,16 @@ If Option 1 is accepted:
 2. Update onboarding and future UI copy to say the pilot is available only in approved states.
 3. Keep README/spec language aligned with one-state launch until broader coverage is reviewed.
 4. Do not add payment or broad U.S. availability copy.
+5. Use `docs/checklist-one-state-free-pilot.md` as the execution checklist.
 
 If Option 3 is accepted instead:
 1. Keep the current state tracker and copy guide.
 2. Add a repo-level note that launch remains paused pending counsel.
 3. Focus future work on product shaping and safety rather than availability claims.
+4. Use `docs/checklist-pause-launch-claims.md` as the execution checklist.
 
 ## Plain-English recommendation
 
 If you want the safest realistic path forward **without pretending we have nationwide clearance**, launch only as a **free pilot in one reviewed state**.
+
+See also `docs/launch-scope-checklist-index.md` for the execution checklists for all three rollout postures.
