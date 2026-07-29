@@ -107,7 +107,7 @@ Source surfaced: `https://legislature.vermont.gov/assets/Legislative-Reports/DFR
 | Vermont | Explicit regime surfaced | Active state study/regulatory signal surfaced; not yet a green-light state. |
 | Virginia | No clear state-specific signal surfaced in preliminary search | Search results were noisy; follow up required. |
 | Washington | No clear state-specific signal surfaced in preliminary search | Not clearance; follow up required. |
-| West Virginia | No clear state-specific signal surfaced in preliminary search | Not clearance; follow up required. |
+| West Virginia | Explicit regime surfaced | Secretary of State Credit Service Organizations registration page surfaced; treat as a priority review state. |
 | Wisconsin | Explicit regime surfaced | Credit Services Organizations statutory framework surfaced. |
 | Wyoming | No clear state-specific signal surfaced in preliminary search | Consumer credit code / registration signals were not cleanly resolved for this exact product. |
 
@@ -129,14 +129,14 @@ A safer current claim is:
 
 ## Recommended next state-law work
 
-1. Treat these as **priority follow-up states**: California, Maryland, Utah, Wisconsin, Tennessee, Texas, Vermont, and likely New York/Florida even though they did not surface a clean result in the first pass.
+1. Treat these as **priority follow-up states**: California, Maryland, Utah, Wisconsin, Tennessee, Texas, West Virginia, Vermont, and likely New York/Florida even though they did not surface a clean result in the first pass.
 2. For each priority state, prepare a one-state mini memo answering:
    - relevant statute/regulator,
    - whether analysis-only appears inside or outside the regime,
    - whether payment changes the answer,
    - what language/features most increase risk,
    - whether registration/licensing/bonding is implicated.
-3. First-round and follow-up memo indexes now exist at `docs/priority-state-memo-index.md` and `docs/followup-state-memo-index.md`; treat them as research inputs, not final clearance.
+3. First-round and follow-up memo indexes now exist at `docs/priority-state-memo-index.md` and `docs/followup-state-memo-index.md`; the remaining-state consolidation lives at `docs/remaining-states-consolidated-memo.md`. Treat all of them as research inputs, not final clearance.
 4. Do not move to a paid nationwide claim until those mini memos are expanded or counsel completes a real 50-state review.
 
 ## Related docs
@@ -146,3 +146,4 @@ A safer current claim is:
 - `docs/copy-boundary-guide.md`
 - `docs/priority-state-memo-index.md`
 - `docs/followup-state-memo-index.md`
+- `docs/remaining-states-consolidated-memo.md`
