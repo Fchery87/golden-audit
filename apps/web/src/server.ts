@@ -347,33 +347,49 @@ const server = createServer(async (request, response) => {
     <title>Golden Audit Pilot</title>
     <style>
       :root { color-scheme: light; font-family: Inter, ui-sans-serif, system-ui, sans-serif; }
-      body { margin: 0; background: #f6f7fb; color: #172033; }
-      main { max-width: 840px; margin: 0 auto; padding: 48px 20px 72px; }
-      .card { background: #fff; border: 1px solid #d9deea; border-radius: 16px; padding: 24px; box-shadow: 0 8px 30px rgba(16, 24, 40, 0.06); }
-      h1, h2 { margin: 0 0 12px; }
-      p { line-height: 1.55; }
-      ul { padding-left: 20px; }
-      .pill { display: inline-block; border-radius: 999px; background: #eef3ff; color: #3451b2; padding: 6px 10px; font-size: 12px; font-weight: 600; }
-      .grid { display: grid; gap: 16px; margin-top: 20px; }
-      code { background: #f1f4fb; padding: 2px 6px; border-radius: 6px; }
+      body { margin: 0; background: linear-gradient(180deg, #f6f7fb 0%, #eef2ff 100%); color: #172033; }
+      main { max-width: 960px; margin: 0 auto; padding: 56px 20px 84px; }
+      .hero { display: grid; gap: 18px; margin-bottom: 20px; }
+      .card { background: rgba(255,255,255,0.92); border: 1px solid #d9deea; border-radius: 18px; padding: 24px; box-shadow: 0 10px 36px rgba(16, 24, 40, 0.08); }
+      h1, h2 { margin: 0 0 12px; line-height: 1.1; }
+      p { line-height: 1.6; margin: 0 0 12px; }
+      ul { padding-left: 20px; margin: 0; }
+      li + li { margin-top: 6px; }
+      .pill { display: inline-block; border-radius: 999px; background: #eef3ff; color: #3451b2; padding: 7px 11px; font-size: 12px; font-weight: 700; letter-spacing: 0.02em; }
+      .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; margin-top: 20px; }
+      code { background: #f1f4fb; padding: 2px 6px; border-radius: 6px; font-size: 0.95em; }
+      .muted { color: #51607a; }
+      .value { font-weight: 700; }
     </style>
   </head>
   <body>
     <main>
-      <span class="pill">California-only educational pilot</span>
-      <div class="card" style="margin-top:16px;">
-        <h1>Pilot availability</h1>
-        <p>${launchScopeAvailabilityClaim}</p>
-        <p>This free pilot provides educational credit-report analysis only — not credit repair, disputes, score guarantees, or legal conclusions.</p>
-      </div>
-      <div class="grid">
+      <section class="hero">
+        <span class="pill">California-only educational pilot</span>
         <div class="card">
-          <h2>Current approved states</h2>
-          <ul>${launchScope.approvedStates.map(state => `<li>${state}</li>`).join('')}</ul>
+          <h1>Pilot availability</h1>
+          <p>${launchScopeAvailabilityClaim}</p>
+          <p class="muted">This free pilot provides educational credit-report analysis only — not credit repair, disputes, score guarantees, or legal conclusions.</p>
         </div>
-        <div class="card">
-          <h2>Current API flow</h2>
-          <p>Use the bounded pilot API to register, record consent, accept authorization, upload a report, and kick off analysis.</p>
+      </section>
+      <div class="grid">
+        <section class="card">
+          <h2>Approved states</h2>
+          <ul>${launchScope.approvedStates.map(state => `<li class="value">${state}</li>`).join('')}</ul>
+        </section>
+        <section class="card">
+          <h2>What this app can do</h2>
+          <ul>
+            <li>Register a pilot session</li>
+            <li>Record approved-state consent</li>
+            <li>Accept written authorization</li>
+            <li>Initialize and complete uploads</li>
+            <li>Kick off analysis and fetch results</li>
+            <li>Confirm collision subgroups when needed</li>
+          </ul>
+        </section>
+        <section class="card">
+          <h2>API endpoints</h2>
           <ul>
             <li><code>POST /consumer/register</code></li>
             <li><code>POST /consumer/consent</code></li>
@@ -381,8 +397,11 @@ const server = createServer(async (request, response) => {
             <li><code>POST /consumer/uploads/init</code></li>
             <li><code>POST /consumer/uploads/complete</code></li>
             <li><code>POST /consumer/uploads/:uploadId/kickoff-analysis</code></li>
+            <li><code>GET /consumer/analyses/:analysisId</code></li>
+            <li><code>GET /consumer/reports/:consumerReportId</code></li>
+            <li><code>GET /consumer/exports/:exportId</code></li>
           </ul>
-        </div>
+        </section>
       </div>
     </main>
   </body>
