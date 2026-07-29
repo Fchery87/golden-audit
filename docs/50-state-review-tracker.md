@@ -136,10 +136,12 @@ A safer current claim is:
    - whether payment changes the answer,
    - what language/features most increase risk,
    - whether registration/licensing/bonding is implicated.
-3. Do not move to a paid nationwide claim until those mini memos exist or counsel completes a real 50-state review.
+3. A first round of those mini memos now exists at `docs/priority-state-memo-index.md`; treat them as research inputs, not final clearance.
+4. Do not move to a paid nationwide claim until those mini memos are expanded or counsel completes a real 50-state review.
 
 ## Related docs
 - `docs/nationwide-legal-regulatory-posture-brief.md`
 - `docs/competitor-credit-positioning-brief.md`
 - `docs/product-boundary-positioning-update.md`
 - `docs/copy-boundary-guide.md`
+- `docs/priority-state-memo-index.md`
