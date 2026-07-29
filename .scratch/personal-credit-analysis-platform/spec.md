@@ -8,7 +8,7 @@ As a U.S. consumer, I can receive a long credit report containing bureau-specifi
 
 I need a secure, evidence-first way to understand what my report displays, identify inconsistencies or potential errors that warrant verification, distinguish uncertainty from evidence, learn constructive credit-building concepts, and track proportionate next steps. I must remain in control of corrections, evidence gathering, communications, and deletion. The product must protect highly sensitive report data and make each analysis reproducible, qualified, and auditable.
 
-The initial product is a direct-to-consumer educational and diagnostic experience for adults in the United States. It accepts user-authorized native-text PDF or static HTML reports, with scanned-PDF OCR deferred unless separately prioritized. It does not replace legal, credit-counseling, identity-theft, tax, bankruptcy, or other professional advice.
+The initial product is a direct-to-consumer educational and diagnostic experience for adults in the United States. It accepts user-authorized native-text PDF or static HTML reports, with scanned-PDF OCR deferred unless separately prioritized. It does not replace legal, credit-counseling, identity-theft, tax, bankruptcy, or other professional advice. **Nationwide availability is a product goal, not a current legal/compliance assumption; launch scope must remain bounded to independently reviewed states until broader coverage is validated.**
 
 ## Solution
 
@@ -192,7 +192,7 @@ The first release should prioritize a supported, invite-only pilot with one coun
 
 ## Implementation Decisions
 
-- The product is a direct-to-consumer, U.S.-only, educational analysis platform for adult users and authorized report owners. The initial pilot is invite-only and limited to one counsel-approved launch state and a bounded set of supported report providers/templates.
+- The product is a direct-to-consumer, U.S.-only, educational analysis platform for adult users and authorized report owners. The initial pilot is invite-only and limited to one counsel-approved launch state and a bounded set of supported report providers/templates. **A nationwide rollout remains a future objective and must not be assumed cleared merely because the product is analysis-only or consumer-upload-only.**
 - The MVP supports native-text PDF and static HTML. Scanned-PDF OCR is deferred to a later phase unless pilot evidence makes it essential. OCR, storage, language-model, notification, and processing providers must be accessed through provider-neutral interfaces.
 - The system uses a staged, durable processing workflow rather than parsing in the browser, in a synchronous upload response, or in a short-lived edge request. The processing lifecycle includes creation, verified upload, malware scan, extraction, normalization, user review, analysis readiness, deterministic analysis, explanation generation, output validation, and completion, with explicit retryable failure, final failure, quarantine, and deletion-pending outcomes.
 - Uploads use private storage, short-lived signed access, content-based validation, malware scanning, active-content stripping, decompression and complexity limits, immutable source hashes, and ingestion metadata. Document text, HTML, metadata, and OCR output are untrusted data and cannot provide instructions to the processing or language-generation system.
@@ -258,6 +258,7 @@ The first release should prioritize a supported, invite-only pilot with one coun
 
 - This spec synthesizes `Personal_Credit_Analysis_Platform_PRD_v0.1.docx`, including its product boundaries, functional requirements, canonical entities, processing lifecycle, security controls, quality targets, phased roadmap, risks, and open decisions.
 - The source PRD explicitly states that product launch, pricing, marketing, contracts, state coverage, Metro 2 use, and the meaning of “CSDA” require qualified legal or subject-matter review. Those are gates, not assumptions that implementation can resolve independently.
+- See also `docs/nationwide-legal-regulatory-posture-brief.md`, `docs/competitor-credit-positioning-brief.md`, `docs/product-boundary-positioning-update.md`, `docs/copy-boundary-guide.md`, and `docs/50-state-review-tracker.md` for the current analysis-only positioning and state-review posture.
 - Before build commitment, the product owner must decide the working product name and claims, first launch state, pricing model, correspondence scope, managed platform versus self-hosting, OCR/model providers and retention terms, final retention periods, evaluation-corpus consent process, the meaning of “CSDA,” and whether Metro 2 is deferred entirely.
 - The next planning artifacts should be a canonical database/schema specification, a P0 rules catalog with fixtures, consumer and admin wireframes, a threat model and vendor questionnaire, a launch-state compliance matrix, and an implementation backlog with estimates.
 - The spec is published as the local issue-tracker spec at `.scratch/personal-credit-analysis-platform/spec.md` with `Status: ready-for-agent`.
