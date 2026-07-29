@@ -128,6 +128,7 @@ If Option 1 is accepted:
 3. Keep README/spec language aligned with one-state launch until broader coverage is reviewed.
 4. Do not add payment or broad U.S. availability copy.
 5. Use `docs/checklist-one-state-free-pilot.md` as the execution checklist.
+6. Use `docs/one-state-launch-selection-memo.md`, `docs/launch-scope-field-schema.md`, and `docs/onboarding-copy-approved-state-pilot.md` as the supporting implementation/governance set.
 
 If Option 3 is accepted instead:
 1. Keep the current state tracker and copy guide.
