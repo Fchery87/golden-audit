@@ -93,14 +93,19 @@ type AnalysisKickoffBody = { jurisdiction?: string; autoConfirmSimpleMatches?: b
 type MatchDecisionBody = { action: 'confirmed' | 'rejected' | 'split' | 'merged'; reason: string }
 type MatchSubgroupBody = { tradelineIds: string[]; reason: string }
 
+type TradelineSummary = { id: string; bureau: string; creditor: string; maskedAccount: string; balanceCents: number | null }
+
 type ConsumerFlowSummary = {
   status: 'analysis-complete' | 'match-review-required'
   reportId: string
   matches: MatchGroup[]
+  tradelines?: TradelineSummary[]
   analysisId?: string
   consumerReportId?: string
   exportId?: string
 }
+
+type CompleteAnalysisBody = { jurisdiction?: string }
 
 function persistPlatform(): void {
   platform.saveSnapshot(snapshotPath)
@@ -229,19 +234,33 @@ function kickoffAnalysisFlow(sessionId: string, uploadId: string, body: Analysis
   const updatedMatches = matches.map(match => confirmedById.get(match.id) ?? match)
   const unresolved = updatedMatches.filter(match => match.state !== 'confirmed' && match.state !== 'rejected')
   if (unresolved.length > 0) {
-    return { status: 'match-review-required', reportId: report.id, matches: updatedMatches }
+    const tradelines: TradelineSummary[] = report.tradelines.map(line => ({
+      id: line.id,
+      bureau: String(line.creditor.bureau),
+      creditor: line.creditor.normalized ?? '',
+      maskedAccount: line.maskedAccount.normalized ?? '',
+      balanceCents: line.balance.normalized ?? null,
+    }))
+    return { status: 'match-review-required', reportId: report.id, matches: updatedMatches, tradelines }
   }
-  const analysis = platform.runAnalysis(sessionId, report.id, resolveRulesetForJurisdiction(jurisdiction), jurisdiction)
+  const completed = completeAnalysisForReport(sessionId, report.id, jurisdiction)
+  return { status: 'analysis-complete', reportId: report.id, matches: updatedMatches, ...completed }
+}
+
+function completeAnalysisForReport(sessionId: string, reportId: string, jurisdiction: Jurisdiction): { analysisId: string; consumerReportId: string; exportId: string } {
+  const analysis = platform.runAnalysis(sessionId, reportId, resolveRulesetForJurisdiction(jurisdiction), jurisdiction)
   const consumerReport = platform.createConsumerReport(sessionId, analysis.id)
   const exportArtifact = platform.createExport(sessionId, consumerReport.id)
-  return {
-    status: 'analysis-complete',
-    reportId: report.id,
-    matches: updatedMatches,
-    analysisId: analysis.id,
-    consumerReportId: consumerReport.id,
-    exportId: exportArtifact.id,
-  }
+  return { analysisId: analysis.id, consumerReportId: consumerReport.id, exportId: exportArtifact.id }
+}
+
+async function handleCompleteAnalysis(request: IncomingMessage, response: ServerResponse, reportId: string): Promise<void> {
+  const sessionId = getSessionId(request)
+  const body = await readJsonBody(request) as CompleteAnalysisBody
+  const jurisdiction = normalizeState(body.jurisdiction ?? launchScope?.provisionalSelectedState ?? 'US-CA')
+  const completed = completeAnalysisForReport(sessionId, reportId, jurisdiction)
+  persistPlatform()
+  respondJson(response, 201, { status: 'analysis-complete', reportId, ...completed })
 }
 
 async function handleRegister(request: IncomingMessage, response: ServerResponse): Promise<void> {
@@ -424,6 +443,12 @@ const server = createServer(async (request, response) => {
     const subgroupMatch = request.method === 'POST' ? url.pathname.match(/^\/consumer\/matches\/([^/]+)\/confirm-subgroup$/) : null
     if (subgroupMatch) {
       await handleMatchSubgroup(request, response, subgroupMatch[1] ?? '')
+      return
+    }
+
+    const completeAnalysisMatch = request.method === 'POST' ? url.pathname.match(/^\/consumer\/reports\/([^/]+)\/complete-analysis$/) : null
+    if (completeAnalysisMatch) {
+      await handleCompleteAnalysis(request, response, completeAnalysisMatch[1] ?? '')
       return
     }
 

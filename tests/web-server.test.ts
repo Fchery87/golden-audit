@@ -49,6 +49,7 @@ type KickoffResponse = {
   status: 'analysis-complete' | 'match-review-required'
   reportId: string
   matches: Array<{ id: string; state: string; confidence: number; tradelineIds: string[]; signals: string[] }>
+  tradelines?: Array<{ id: string; creditor: string; maskedAccount: string; bureau: string; balanceCents: number | null }>
   analysisId?: string
   consumerReportId?: string
   exportId?: string
@@ -332,6 +333,8 @@ test('web boundary supports manual subgroup confirmation for oversized collision
     assert.equal(kickoff.body.matches.length, 1)
     assert.equal(kickoff.body.matches[0]?.state, 'split')
     assert.ok(kickoff.body.matches[0]?.signals.includes('collision-set'))
+    assert.ok(Array.isArray(kickoff.body.tradelines) && (kickoff.body.tradelines?.length ?? 0) === 4)
+    assert.ok(kickoff.body.tradelines?.every(t => typeof t.creditor === 'string' && typeof t.maskedAccount === 'string'))
 
     const subgroup = await postJson<{ id: string; state: string; tradelineIds: string[] }>(port, `/consumer/matches/${kickoff.body.matches[0]?.id}/confirm-subgroup`, {
       tradelineIds: kickoff.body.matches[0]?.tradelineIds.slice(0, 2) ?? [],
@@ -340,6 +343,18 @@ test('web boundary supports manual subgroup confirmation for oversized collision
     assert.equal(subgroup.statusCode, 201)
     assert.equal(subgroup.body.state, 'confirmed')
     assert.equal(subgroup.body.tradelineIds.length, 2)
+
+    const complete = await postJson<{ status: string; analysisId: string; consumerReportId: string; exportId: string }>(
+      port,
+      `/consumer/reports/${kickoff.body.reportId}/complete-analysis`,
+      { jurisdiction: 'CA' },
+      sessionHeader,
+    )
+    assert.equal(complete.statusCode, 201)
+    assert.equal(complete.body.status, 'analysis-complete')
+    assert.match(complete.body.analysisId, /[0-9a-f-]{36}/i)
+    assert.match(complete.body.consumerReportId, /[0-9a-f-]{36}/i)
+    assert.match(complete.body.exportId, /[0-9a-f-]{36}/i)
   } finally {
     child.kill()
     await once(child, 'exit').catch(() => undefined)

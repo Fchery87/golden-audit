@@ -29,10 +29,27 @@ export type MatchGroupSummary = {
   signals: string[]
 }
 
+export type TradelineSummary = {
+  id: string
+  bureau: string
+  creditor: string
+  maskedAccount: string
+  balanceCents: number | null
+}
+
+export type CompleteAnalysisResult = {
+  status: 'analysis-complete'
+  reportId: string
+  analysisId: string
+  consumerReportId: string
+  exportId: string
+}
+
 export type KickoffResult = {
   status: 'analysis-complete' | 'match-review-required'
   reportId: string
   matches: MatchGroupSummary[]
+  tradelines?: TradelineSummary[]
   analysisId?: string
   consumerReportId?: string
   exportId?: string
@@ -154,6 +171,13 @@ export const api = {
       tradelineIds,
       reason,
     })
+  },
+
+  completeAnalysis(reportId: string, jurisdiction = 'CA'): Promise<CompleteAnalysisResult> {
+    return post<CompleteAnalysisResult>(
+      `/consumer/reports/${encodeURIComponent(reportId)}/complete-analysis`,
+      { jurisdiction },
+    )
   },
 
   getAnalysis(id: string): Promise<Analysis> {
