@@ -48,15 +48,34 @@ type UploadCompleteResponse = {
 type KickoffResponse = {
   status: 'analysis-complete' | 'match-review-required'
   reportId: string
-  matches: Array<{ state: string; confidence: number; tradelineIds: string[] }>
+  matches: Array<{ id: string; state: string; confidence: number; tradelineIds: string[]; signals: string[] }>
   analysisId?: string
   consumerReportId?: string
   exportId?: string
 }
 
-function getJson<T>(port: number, path: string): Promise<JsonResponse<T>> {
+type AnalysisResponse = {
+  id: string
+  reportId: string
+  findings: Array<{ id: string; title: string }>
+}
+
+type ConsumerReportResponse = {
+  id: string
+  analysisId: string
+  findings: Array<{ id: string }>
+  limitations: string[]
+}
+
+type ExportResponse = {
+  id: string
+  reportId: string
+  content: string
+}
+
+function getJson<T>(port: number, path: string, headers: Record<string, string> = {}): Promise<JsonResponse<T>> {
   return new Promise((resolve, reject) => {
-    const req = request({ hostname: '127.0.0.1', port, path, method: 'GET' }, response => {
+    const req = request({ hostname: '127.0.0.1', port, path, method: 'GET', headers }, response => {
       let data = ''
       response.setEncoding('utf8')
       response.on('data', chunk => { data += chunk })
@@ -116,6 +135,22 @@ async function waitForServer(port: number): Promise<void> {
   throw new Error(`server on ${port} did not become healthy`)
 }
 
+function makeSyntheticReport(tradelines: Array<Record<string, unknown>>) {
+  return {
+    provider: 'synthetic-provider',
+    template: 'pilot-v1',
+    reportDate: '2026-07-01',
+    identity: ['A Consumer'],
+    addresses: ['1 Main St'],
+    employers: [],
+    inquiries: ['Example Bank 2026-06'],
+    publicRecords: [],
+    scores: [700],
+    remarks: [],
+    tradelines,
+  }
+}
+
 test('web boundary publishes approved-state onboarding and pilot availability from launch scope fixtures', async () => {
   const port = 3199
   const persistenceDir = mkdtempSync(join(tmpdir(), 'golden-audit-web-'))
@@ -151,7 +186,7 @@ test('web boundary publishes approved-state onboarding and pilot availability fr
   }
 })
 
-test('web boundary supports the smallest real consumer pilot flow through analysis completion', async () => {
+test('web boundary supports the smallest real consumer pilot flow through analysis completion and fetch APIs', async () => {
   const port = 3200
   const persistenceDir = mkdtempSync(join(tmpdir(), 'golden-audit-web-'))
   const child = spawn(process.execPath, ['--import', 'tsx', 'apps/web/src/server.ts'], {
@@ -194,22 +229,10 @@ test('web boundary supports the smallest real consumer pilot flow through analys
     assert.equal(uploadInit.statusCode, 201)
     assert.equal(uploadInit.body.stage, 'initialized')
 
-    const syntheticReport = {
-      provider: 'synthetic-provider',
-      template: 'pilot-v1',
-      reportDate: '2026-07-01',
-      identity: ['A Consumer'],
-      addresses: ['1 Main St'],
-      employers: [],
-      inquiries: ['Example Bank 2026-06'],
-      publicRecords: [],
-      scores: [700],
-      remarks: [],
-      tradelines: [
-        { bureau: 'equifax', creditor: 'Example Bank', account: '12345678', accountType: 'revolving', balance: 12500, status: 'open', opened: '2020-01', updated: '2026-06-30' },
-        { bureau: 'experian', creditor: 'Example Bank', account: '12345678', accountType: 'revolving', balance: 15000, status: 'open', opened: '2020-01', updated: '2026-06-28' },
-      ],
-    }
+    const syntheticReport = makeSyntheticReport([
+      { bureau: 'equifax', creditor: 'Example Bank', account: '12345678', accountType: 'revolving', balance: 12500, status: 'open', opened: '2020-01', updated: '2026-06-30' },
+      { bureau: 'experian', creditor: 'Example Bank', account: '12345678', accountType: 'revolving', balance: 15000, status: 'open', opened: '2020-01', updated: '2026-06-28' },
+    ])
 
     const uploadComplete = await postJson<UploadCompleteResponse>(port, '/consumer/uploads/complete', {
       uploadId: uploadInit.body.id,
@@ -235,6 +258,88 @@ test('web boundary supports the smallest real consumer pilot flow through analys
     assert.match(kickoff.body.analysisId ?? '', /[0-9a-f-]{36}/i)
     assert.match(kickoff.body.consumerReportId ?? '', /[0-9a-f-]{36}/i)
     assert.match(kickoff.body.exportId ?? '', /[0-9a-f-]{36}/i)
+
+    const analysis = await getJson<AnalysisResponse>(port, `/consumer/analyses/${kickoff.body.analysisId}`, sessionHeader)
+    assert.equal(analysis.statusCode, 200)
+    assert.equal(analysis.body.reportId, kickoff.body.reportId)
+    assert.equal(analysis.body.findings.length, 1)
+
+    const consumerReport = await getJson<ConsumerReportResponse>(port, `/consumer/reports/${kickoff.body.consumerReportId}`, sessionHeader)
+    assert.equal(consumerReport.statusCode, 200)
+    assert.equal(consumerReport.body.analysisId, kickoff.body.analysisId)
+    assert.match(consumerReport.body.limitations.join(' '), /Educational information only/)
+
+    const exportArtifact = await getJson<ExportResponse>(port, `/consumer/exports/${kickoff.body.exportId}`, sessionHeader)
+    assert.equal(exportArtifact.statusCode, 200)
+    assert.match(exportArtifact.body.content, /Educational information only/)
+  } finally {
+    child.kill()
+    await once(child, 'exit').catch(() => undefined)
+    rmSync(persistenceDir, { recursive: true, force: true })
+  }
+})
+
+test('web boundary supports manual subgroup confirmation for oversized collision sets', async () => {
+  const port = 3201
+  const persistenceDir = mkdtempSync(join(tmpdir(), 'golden-audit-web-'))
+  const child = spawn(process.execPath, ['--import', 'tsx', 'apps/web/src/server.ts'], {
+    env: { ...process.env, WEB_PORT: String(port), PILOT_PERSISTENCE_DIR: persistenceDir },
+    stdio: 'ignore',
+  })
+
+  try {
+    await waitForServer(port)
+
+    const register = await postJson<RegisterResponse>(port, '/consumer/register', {
+      email: 'collision@example.com',
+      password: 'correct horse battery staple',
+    })
+    const sessionHeader = { 'x-session-id': register.body.sessionId }
+
+    const consent = await postJson<ConsentResponse>(port, '/consumer/consent', {
+      version: '2026-01',
+      adultUSConsumer: true,
+      authorizedReportUse: true,
+      educationalLimitations: true,
+      sensitiveDataHandling: true,
+      residence: 'CA',
+      analysisJurisdiction: 'CA',
+    }, sessionHeader)
+    await postJson<AuthorizationResponse>(port, '/consumer/authorization', {}, sessionHeader)
+    const uploadInit = await postJson<UploadInitResponse>(port, '/consumer/uploads/init', { workspaceId: consent.body.workspaceId }, sessionHeader)
+
+    const oversizedReport = makeSyntheticReport([
+      { bureau: 'equifax', creditor: 'Store Card', account: '10001234', accountType: 'revolving', balance: 10000, status: 'open', opened: '2020-01', updated: '2026-06-30' },
+      { bureau: 'experian', creditor: 'Store Card', account: '20001234', accountType: 'revolving', balance: 10500, status: 'open', opened: '2020-01', updated: '2026-06-28' },
+      { bureau: 'transunion', creditor: 'Store Card', account: '30001234', accountType: 'revolving', balance: 10250, status: 'open', opened: '2020-01', updated: '2026-06-27' },
+      { bureau: 'equifax', creditor: 'Store Card', account: '40001234', accountType: 'revolving', balance: 10100, status: 'open', opened: '2020-01', updated: '2026-06-26' },
+    ])
+
+    const uploadComplete = await postJson<UploadCompleteResponse>(port, '/consumer/uploads/complete', {
+      uploadId: uploadInit.body.id,
+      token: uploadInit.body.token,
+      fileName: 'oversized.html',
+      mediaType: 'text/html',
+      contentBase64: Buffer.from(`<html>GOLDEN-AUDIT-REPORT:${JSON.stringify(oversizedReport)}</body></html>`).toString('base64'),
+    })
+
+    const kickoff = await postJson<KickoffResponse>(port, `/consumer/uploads/${uploadComplete.body.id}/kickoff-analysis`, {
+      jurisdiction: 'CA',
+      autoConfirmSimpleMatches: false,
+    }, sessionHeader)
+    assert.equal(kickoff.statusCode, 202)
+    assert.equal(kickoff.body.status, 'match-review-required')
+    assert.equal(kickoff.body.matches.length, 1)
+    assert.equal(kickoff.body.matches[0]?.state, 'split')
+    assert.ok(kickoff.body.matches[0]?.signals.includes('collision-set'))
+
+    const subgroup = await postJson<{ id: string; state: string; tradelineIds: string[] }>(port, `/consumer/matches/${kickoff.body.matches[0]?.id}/confirm-subgroup`, {
+      tradelineIds: kickoff.body.matches[0]?.tradelineIds.slice(0, 2) ?? [],
+      reason: 'Consumer confirmed subgroup',
+    }, sessionHeader)
+    assert.equal(subgroup.statusCode, 201)
+    assert.equal(subgroup.body.state, 'confirmed')
+    assert.equal(subgroup.body.tradelineIds.length, 2)
   } finally {
     child.kill()
     await once(child, 'exit').catch(() => undefined)

@@ -24,12 +24,18 @@ The web boundary now exposes:
 - `GET /health` — health status
 - `GET /pilot-availability?state=CA` — approved-state gating response derived from the configured launch scope
 - `GET /` — onboarding-state copy and current pilot-scope summary for the app shell
+- `GET /app` — minimal browser-facing pilot shell over the current API
 - `POST /consumer/register` — create a consumer session for the bounded pilot API
 - `POST /consumer/consent` — record approved-state consent using `x-session-id`
 - `POST /consumer/authorization` — record the standalone written authorization using `x-session-id`
 - `POST /consumer/uploads/init` — initialize an upload token using `x-session-id`
 - `POST /consumer/uploads/complete` — complete an upload with base64 content
 - `POST /consumer/uploads/:uploadId/kickoff-analysis` — parse, review, match, analyze, and generate a consumer report/export for the smallest supported flow
+- `POST /consumer/matches/:matchId/decision` — manually change a proposed match state
+- `POST /consumer/matches/:matchId/confirm-subgroup` — confirm a subgroup from an oversized collision set
+- `GET /consumer/analyses/:analysisId` — fetch analysis results
+- `GET /consumer/reports/:consumerReportId` — fetch the consumer-facing report
+- `GET /consumer/exports/:exportId` — fetch a generated export artifact
 
 ## Workspace boundaries
 

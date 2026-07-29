@@ -49,6 +49,7 @@ type UploadInitBody = { workspaceId: string }
 type UploadCompleteBody = { uploadId: string; token: string; fileName: string; mediaType: string; contentBase64: string }
 type AnalysisKickoffBody = { jurisdiction?: string; autoConfirmSimpleMatches?: boolean }
 type MatchDecisionBody = { action: 'confirmed' | 'rejected' | 'split' | 'merged'; reason: string }
+type MatchSubgroupBody = { tradelineIds: string[]; reason: string }
 
 type ConsumerFlowSummary = {
   status: 'analysis-complete' | 'match-review-required'
@@ -259,7 +260,31 @@ async function handleMatchDecision(request: IncomingMessage, response: ServerRes
   const sessionId = getSessionId(request)
   const body = await readJsonBody(request) as MatchDecisionBody
   const match = platform.decideMatch(sessionId, matchId, body.action, body.reason)
+  persistPlatform()
   respondJson(response, 200, match)
+}
+
+async function handleMatchSubgroup(request: IncomingMessage, response: ServerResponse, matchId: string): Promise<void> {
+  const sessionId = getSessionId(request)
+  const body = await readJsonBody(request) as MatchSubgroupBody
+  const match = platform.confirmMatchSubgroup(sessionId, matchId, body.tradelineIds, body.reason)
+  persistPlatform()
+  respondJson(response, 201, match)
+}
+
+async function handleGetAnalysis(request: IncomingMessage, response: ServerResponse, analysisId: string): Promise<void> {
+  const sessionId = getSessionId(request)
+  respondJson(response, 200, platform.getAnalysis(sessionId, analysisId))
+}
+
+async function handleGetConsumerReport(request: IncomingMessage, response: ServerResponse, consumerReportId: string): Promise<void> {
+  const sessionId = getSessionId(request)
+  respondJson(response, 200, platform.getConsumerReport(sessionId, consumerReportId))
+}
+
+async function handleGetExport(request: IncomingMessage, response: ServerResponse, exportId: string): Promise<void> {
+  const sessionId = getSessionId(request)
+  respondJson(response, 200, platform.getExport(sessionId, exportId))
 }
 
 const server = createServer(async (request, response) => {
@@ -312,6 +337,59 @@ const server = createServer(async (request, response) => {
       return
     }
 
+    if (request.method === 'GET' && url.pathname === '/app') {
+      response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
+      response.end(`<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Golden Audit Pilot</title>
+    <style>
+      :root { color-scheme: light; font-family: Inter, ui-sans-serif, system-ui, sans-serif; }
+      body { margin: 0; background: #f6f7fb; color: #172033; }
+      main { max-width: 840px; margin: 0 auto; padding: 48px 20px 72px; }
+      .card { background: #fff; border: 1px solid #d9deea; border-radius: 16px; padding: 24px; box-shadow: 0 8px 30px rgba(16, 24, 40, 0.06); }
+      h1, h2 { margin: 0 0 12px; }
+      p { line-height: 1.55; }
+      ul { padding-left: 20px; }
+      .pill { display: inline-block; border-radius: 999px; background: #eef3ff; color: #3451b2; padding: 6px 10px; font-size: 12px; font-weight: 600; }
+      .grid { display: grid; gap: 16px; margin-top: 20px; }
+      code { background: #f1f4fb; padding: 2px 6px; border-radius: 6px; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <span class="pill">California-only educational pilot</span>
+      <div class="card" style="margin-top:16px;">
+        <h1>Pilot availability</h1>
+        <p>${launchScopeAvailabilityClaim}</p>
+        <p>This free pilot provides educational credit-report analysis only — not credit repair, disputes, score guarantees, or legal conclusions.</p>
+      </div>
+      <div class="grid">
+        <div class="card">
+          <h2>Current approved states</h2>
+          <ul>${launchScope.approvedStates.map(state => `<li>${state}</li>`).join('')}</ul>
+        </div>
+        <div class="card">
+          <h2>Current API flow</h2>
+          <p>Use the bounded pilot API to register, record consent, accept authorization, upload a report, and kick off analysis.</p>
+          <ul>
+            <li><code>POST /consumer/register</code></li>
+            <li><code>POST /consumer/consent</code></li>
+            <li><code>POST /consumer/authorization</code></li>
+            <li><code>POST /consumer/uploads/init</code></li>
+            <li><code>POST /consumer/uploads/complete</code></li>
+            <li><code>POST /consumer/uploads/:uploadId/kickoff-analysis</code></li>
+          </ul>
+        </div>
+      </div>
+    </main>
+  </body>
+</html>`)
+      return
+    }
+
     if (request.method === 'POST' && url.pathname === '/consumer/register') {
       await handleRegister(request, response)
       return
@@ -340,12 +418,37 @@ const server = createServer(async (request, response) => {
     const kickoffMatch = request.method === 'POST' ? url.pathname.match(/^\/consumer\/uploads\/([^/]+)\/kickoff-analysis$/) : null
     if (kickoffMatch) {
       await handleKickoffAnalysis(request, response, kickoffMatch[1] ?? '')
+      persistPlatform()
+      return
+    }
+
+    const subgroupMatch = request.method === 'POST' ? url.pathname.match(/^\/consumer\/matches\/([^/]+)\/confirm-subgroup$/) : null
+    if (subgroupMatch) {
+      await handleMatchSubgroup(request, response, subgroupMatch[1] ?? '')
       return
     }
 
     const decisionMatch = request.method === 'POST' ? url.pathname.match(/^\/consumer\/matches\/([^/]+)\/decision$/) : null
     if (decisionMatch) {
       await handleMatchDecision(request, response, decisionMatch[1] ?? '')
+      return
+    }
+
+    const analysisMatch = request.method === 'GET' ? url.pathname.match(/^\/consumer\/analyses\/([^/]+)$/) : null
+    if (analysisMatch) {
+      await handleGetAnalysis(request, response, analysisMatch[1] ?? '')
+      return
+    }
+
+    const consumerReportMatch = request.method === 'GET' ? url.pathname.match(/^\/consumer\/reports\/([^/]+)$/) : null
+    if (consumerReportMatch) {
+      await handleGetConsumerReport(request, response, consumerReportMatch[1] ?? '')
+      return
+    }
+
+    const exportMatch = request.method === 'GET' ? url.pathname.match(/^\/consumer\/exports\/([^/]+)$/) : null
+    if (exportMatch) {
+      await handleGetExport(request, response, exportMatch[1] ?? '')
       return
     }
 
