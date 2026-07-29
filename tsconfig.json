@@ -11,5 +11,6 @@
     "skipLibCheck": true,
     "outDir": "dist"
   },
-  "include": ["apps/**/*.ts", "packages/**/*.ts", "scripts/**/*.ts", "tests/**/*.ts"]
+  "include": ["apps/**/*.ts", "packages/**/*.ts", "scripts/**/*.ts", "tests/**/*.ts"],
+  "exclude": ["apps/web/client", "apps/web/client/**"]
 }

@@ -1,5 +1,6 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { extname, join, normalize } from 'node:path'
 import { createHealthStatus } from '../../../packages/domain/src/index.js'
 import {
   CreditAnalysisPlatform,
@@ -32,6 +33,47 @@ const launchScopeAvailabilityClaim = fixtureOnly
   ? 'Pilot currently limited to approved pilot states only.'
   : launchScope.availabilityClaim
 const publishedRulesetByJurisdiction = getPublishedRulesetByJurisdiction(platform)
+
+const clientDistPath = existsSync(join(process.cwd(), 'apps/web/client/dist'))
+  ? join(process.cwd(), 'apps/web/client/dist')
+  : null
+
+const mimeByExtension: Record<string, string> = {
+  '.html': 'text/html; charset=utf-8',
+  '.js': 'text/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.svg': 'image/svg+xml',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.woff2': 'font/woff2',
+  '.json': 'application/json; charset=utf-8',
+  '.ico': 'image/x-icon',
+}
+
+function serveStaticAsset(response: ServerResponse, relativePath: string): void {
+  if (!clientDistPath) {
+    respondJson(response, 404, { error: 'Frontend not built. Run: npm run build:web' })
+    return
+  }
+  const safe = normalize(relativePath).replace(/^(\.\.[/\\])+/, '')
+  const filePath = join(clientDistPath, safe)
+  if (!filePath.startsWith(clientDistPath) || !existsSync(filePath)) {
+    respondJson(response, 404, { error: 'Not found' })
+    return
+  }
+  response.writeHead(200, { 'content-type': mimeByExtension[extname(filePath)] ?? 'application/octet-stream' })
+  response.end(readFileSync(filePath))
+}
+
+function serveClientIndex(response: ServerResponse): void {
+  if (!clientDistPath) {
+    response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
+    response.end('<!doctype html><meta charset="utf-8"><title>Golden Audit</title><p>Frontend not built. Run: <code>npm run build:web</code></p>')
+    return
+  }
+  response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
+  response.end(readFileSync(join(clientDistPath, 'index.html')))
+}
 
 type JsonRecord = Record<string, unknown>
 type ConsumerSessionHeader = { sessionId: string }
@@ -338,74 +380,12 @@ const server = createServer(async (request, response) => {
     }
 
     if (request.method === 'GET' && url.pathname === '/app') {
-      response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
-      response.end(`<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Golden Audit Pilot</title>
-    <style>
-      :root { color-scheme: light; font-family: Inter, ui-sans-serif, system-ui, sans-serif; }
-      body { margin: 0; background: linear-gradient(180deg, #f6f7fb 0%, #eef2ff 100%); color: #172033; }
-      main { max-width: 960px; margin: 0 auto; padding: 56px 20px 84px; }
-      .hero { display: grid; gap: 18px; margin-bottom: 20px; }
-      .card { background: rgba(255,255,255,0.92); border: 1px solid #d9deea; border-radius: 18px; padding: 24px; box-shadow: 0 10px 36px rgba(16, 24, 40, 0.08); }
-      h1, h2 { margin: 0 0 12px; line-height: 1.1; }
-      p { line-height: 1.6; margin: 0 0 12px; }
-      ul { padding-left: 20px; margin: 0; }
-      li + li { margin-top: 6px; }
-      .pill { display: inline-block; border-radius: 999px; background: #eef3ff; color: #3451b2; padding: 7px 11px; font-size: 12px; font-weight: 700; letter-spacing: 0.02em; }
-      .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; margin-top: 20px; }
-      code { background: #f1f4fb; padding: 2px 6px; border-radius: 6px; font-size: 0.95em; }
-      .muted { color: #51607a; }
-      .value { font-weight: 700; }
-    </style>
-  </head>
-  <body>
-    <main>
-      <section class="hero">
-        <span class="pill">California-only educational pilot</span>
-        <div class="card">
-          <h1>Pilot availability</h1>
-          <p>${launchScopeAvailabilityClaim}</p>
-          <p class="muted">This free pilot provides educational credit-report analysis only — not credit repair, disputes, score guarantees, or legal conclusions.</p>
-        </div>
-      </section>
-      <div class="grid">
-        <section class="card">
-          <h2>Approved states</h2>
-          <ul>${launchScope.approvedStates.map(state => `<li class="value">${state}</li>`).join('')}</ul>
-        </section>
-        <section class="card">
-          <h2>What this app can do</h2>
-          <ul>
-            <li>Register a pilot session</li>
-            <li>Record approved-state consent</li>
-            <li>Accept written authorization</li>
-            <li>Initialize and complete uploads</li>
-            <li>Kick off analysis and fetch results</li>
-            <li>Confirm collision subgroups when needed</li>
-          </ul>
-        </section>
-        <section class="card">
-          <h2>API endpoints</h2>
-          <ul>
-            <li><code>POST /consumer/register</code></li>
-            <li><code>POST /consumer/consent</code></li>
-            <li><code>POST /consumer/authorization</code></li>
-            <li><code>POST /consumer/uploads/init</code></li>
-            <li><code>POST /consumer/uploads/complete</code></li>
-            <li><code>POST /consumer/uploads/:uploadId/kickoff-analysis</code></li>
-            <li><code>GET /consumer/analyses/:analysisId</code></li>
-            <li><code>GET /consumer/reports/:consumerReportId</code></li>
-            <li><code>GET /consumer/exports/:exportId</code></li>
-          </ul>
-        </section>
-      </div>
-    </main>
-  </body>
-</html>`)
+      serveClientIndex(response)
+      return
+    }
+
+    if (request.method === 'GET' && url.pathname.startsWith('/assets/')) {
+      serveStaticAsset(response, url.pathname.slice(1))
       return
     }
 
@@ -468,6 +448,11 @@ const server = createServer(async (request, response) => {
     const exportMatch = request.method === 'GET' ? url.pathname.match(/^\/consumer\/exports\/([^/]+)$/) : null
     if (exportMatch) {
       await handleGetExport(request, response, exportMatch[1] ?? '')
+      return
+    }
+
+    if (request.method === 'GET' && extname(url.pathname)) {
+      serveStaticAsset(response, url.pathname.slice(1))
       return
     }
 

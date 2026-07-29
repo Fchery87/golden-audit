@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Direction B · Calm Audit</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,300;0,6..72,400;0,6..72,500;0,6..72,600;1,6..72,400&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root[data-theme="dark"]{
+    --bg:#1A1916; --paper:#22201C; --rule:#3A3731; --text:#EDE7DA; --muted:#A39B89; --faint:#6E6759;
+    --accent:#2DD4BF; --accent-deep:#0F766E; --ink:#EDE7DA;
+    --positive:#86C5A4; --negative:#E08A7A;
+  }
+  :root[data-theme="light"]{
+    --bg:#F6F4EE; --paper:#FBFAF5; --rule:#DDD7C8; --text:#23211B; --muted:#6B6557; --faint:#A39B89;
+    --accent:#0F766E; --accent-deep:#134E4A; --ink:#23211B;
+    --positive:#3F7D5C; --negative:#B45343;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);font-family:'Newsreader',Georgia,serif;font-size:17px;line-height:1.6;-webkit-font-smoothing:antialiased;transition:background .3s}
+  .sheet{max-width:680px;margin:0 auto;padding:88px 32px 64px;position:relative}
+  .masthead{display:flex;justify-content:space-between;align-items:baseline;border-bottom:1px solid var(--rule);padding-bottom:18px;margin-bottom:72px;font-size:13px;color:var(--muted)}
+  .mast{letter-spacing:.18em;text-transform:uppercase}
+  .toggle{font:inherit;font-size:13px;color:var(--muted);background:none;border:1px solid var(--rule);border-radius:2px;padding:6px 12px;cursor:pointer;font-family:'JetBrains Mono',monospace;letter-spacing:0}
+  .meta{font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--faint);letter-spacing:.04em;margin-bottom:28px}
+  h1{font-weight:300;font-size:54px;line-height:1.08;letter-spacing:-.015em;margin:0 0 28px}
+  h1 .pull{color:var(--accent);font-style:italic;font-weight:400}
+  .lede{font-size:20px;line-height:1.55;color:var(--text);max-width:540px;margin:0 0 16px}
+  .lede.dim{color:var(--muted);font-size:17px;margin-bottom:40px}
+  .sigline{display:flex;align-items:center;gap:14px;margin-bottom:6px}
+  .rule-x{flex:1;height:1px;background:var(--rule)}
+  .cta-text{font-family:'JetBrains Mono',monospace;font-size:13px;color:var(--accent-deep);font-weight:500;letter-spacing:.02em}
+  .availability{font-size:15px;color:var(--muted);font-style:italic;margin-top:8px}
+  .availability b{color:var(--text);font-style:normal;font-weight:500}
+  .divider{margin:80px 0 40px;display:flex;align-items:center;gap:14px}
+  .divider .num{font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--faint)}
+  .divider .lbl{font-size:12px;letter-spacing:.16em;text-transform:uppercase;color:var(--muted)}
+  .quote-finding{border-left:3px solid var(--accent);padding:4px 0 4px 28px;margin:0 0 32px}
+  .qf-head{font-size:13px;font-family:'JetBrains Mono',monospace;color:var(--accent-deep);letter-spacing:.04em;margin-bottom:14px;text-transform:uppercase}
+  .qf-body{font-size:23px;line-height:1.4;font-weight:400;letter-spacing:-.005em}
+  .qf-body b{font-weight:500;font-variant-numeric:tabular-nums}
+  .qf-note{font-size:15px;color:var(--muted);font-style:italic;margin-top:14px;line-height:1.5}
+  .ledger{font-family:'JetBrains Mono',monospace;font-size:13px;color:var(--muted);margin-top:18px;border-top:1px solid var(--rule);padding-top:14px}
+  .ledger div{display:flex;justify-content:space-between;padding:4px 0}
+  .ledger b{color:var(--text);font-weight:500}
+  .swatches{display:flex;gap:0;margin-top:56px;border-top:1px solid var(--rule);border-bottom:1px solid var(--rule)}
+  .sw{flex:1;padding:16px 0;text-align:center}
+  .sw+ .sw{border-left:1px solid var(--rule)}
+  .sw-chip{height:40px;width:40px;border-radius:50%;margin:0 auto 10px}
+  .sw-meta{font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--muted)}
+  .sw-meta b{display:block;color:var(--text);font-size:11px;margin-top:2px}
+</style>
+</head>
+<body>
+<div class="sheet">
+  <div class="masthead">
+    <span class="mast">Golden Audit · Pilot Edition</span>
+    <button class="toggle" onclick="toggleTheme()">[ <span id="tn">dark</span> ]</button>
+  </div>
+
+  <div class="meta">№ 001 / CALIFORNIA / INVITE-ONLY</div>
+  <h1>Your three credit bureaus rarely <span class="pull">agree.</span></h1>
+  <p class="lede">Upload a report. We read it carefully and tell you — plainly, in writing — where Equifax, Experian, and TransUnion differ.</p>
+  <p class="lede dim">An educational reading of your file. Not a dispute. Not a score promise. Not legal advice.</p>
+
+  <div class="sigline"><div class="rule-x"></div><span class="cta-text">→ Begin the reading</span><div class="rule-x"></div></div>
+  <p class="availability">Available in <b>California</b>, free, by invitation.</p>
+
+  <div class="divider"><span class="num">01</span><div class="rule-x"></div><span class="lbl">An example finding</span></div>
+
+  <blockquote class="quote-finding">
+    <div class="qf-head">Balance difference · Medium</div>
+    <div class="qf-body">Experian reports <b>$15,000</b> on a revolving account where Equifax shows <b>$12,500</b> — a difference of <b>$2,500</b> that may reflect a reporting date, not an error.</div>
+    <div class="qf-note">We describe what we see. We don't decide who is right.</div>
+    <div class="ledger">
+      <div><span>Equifax</span><b>$12,500</b></div>
+      <div><span>Experian</span><b>$15,000</b></div>
+      <div><span>Difference</span><b style="color:var(--accent)">+$2,500</b></div>
+    </div>
+  </blockquote>
+
+  <div class="swatches">
+    <div class="sw"><div class="sw-chip" style="background:#1A1916"></div><div class="sw-meta">Dark paper<b>#1A1916</b></div></div>
+    <div class="sw"><div class="sw-chip" style="background:#F6F4EE"></div><div class="sw-meta">Light paper<b>#F6F4EE</b></div></div>
+    <div class="sw"><div class="sw-chip" style="background:#0F766E"></div><div class="sw-meta">Teal accent<b>#0F766E</b></div></div>
+  </div>
+</div>
+<script>function toggleTheme(){const r=document.documentElement;const n=r.dataset.theme==='dark'?'light':'dark';r.dataset.theme=n;document.getElementById('tn').textContent=n}</script>
+</body>
+</html>
