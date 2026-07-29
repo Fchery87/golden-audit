@@ -1,4 +1,5 @@
 import { createHash, randomBytes, randomUUID, scryptSync, timingSafeEqual } from 'node:crypto'
+import { readFileSync, writeFileSync } from 'node:fs'
 import { applicationVersion } from '../../domain/src/index.js'
 import { evaluateAnalysis, SEVERITY_RANK } from '../../analysis-core/src/index.js'
 import { redactReportText } from '../../redaction/src/index.js'
@@ -195,6 +196,34 @@ export type PilotApprovalRecordFile = {
   approvals: Array<{ area: PilotApprovalArea; approver: string; evidenceReference: string }>
 }
 
+export type PlatformSnapshot = {
+  users: User[]
+  usersByEmail: Array<[string, Id]>
+  sessions: Session[]
+  workspaces: Workspace[]
+  authorizations: AuthorizationRecord[]
+  authorizationByUser: Array<[Id, Id]>
+  uploads: Upload[]
+  uploadByHash: Array<[string, Id]>
+  rawUploadBytes: Array<[Id, string]>
+  reports: CanonicalReport[]
+  authorities: Authority[]
+  modules: EducationModule[]
+  rules: Rule[]
+  publishedRulesets: Array<[string, Rule[]]>
+  publishedAuthorities: Authority[]
+  publishedModules: EducationModule[]
+  matches: MatchGroup[]
+  analyses: Analysis[]
+  consumerReports: ConsumerReport[]
+  exports: ExportArtifact[]
+  deletionJobs: DeletionJob[]
+  reviewers: Reviewer[]
+  pilotApprovals: PilotApproval[]
+  launchScope?: LaunchScope
+  auditEvents: AuditEvent[]
+}
+
 const now = () => new Date().toISOString()
 const hashPassword = (password: string, salt: string) => scryptSync(password, salt, 32).toString('hex')
 const maskAccount = (value: string) => `••••${value.replace(/\D/g, '').slice(-4)}`
@@ -224,8 +253,8 @@ export class CreditAnalysisPlatform {
   private rawUploadBytes = new Map<Id, Uint8Array>()
   private reviewers = new Map<Id, Reviewer>()
   private pilotApprovals = new Map<PilotApprovalArea, PilotApproval>()
-  private launchScope?: LaunchScope
-  readonly auditEvents: AuditEvent[] = []
+  private launchScope: LaunchScope | undefined
+  auditEvents: AuditEvent[] = []
 
   register(input: { email: string; password: string }): { userId: Id; sessionId: Id } {
     if (!/^\S+@\S+\.\S+$/.test(input.email)) throw new Error('A valid email is required')
@@ -319,6 +348,74 @@ export class CreditAnalysisPlatform {
       approvalsLoaded += 1
     }
     return { ...(scope ? { launchScope: scope } : {}), approvalsLoaded, fixtureOnly }
+  }
+
+  exportSnapshot(): PlatformSnapshot {
+    return {
+      users: [...this.users.values()].map(item => structuredClone(item)),
+      usersByEmail: [...this.usersByEmail.entries()],
+      sessions: [...this.sessions.values()].map(item => structuredClone(item)),
+      workspaces: [...this.workspaces.values()].map(item => structuredClone(item)),
+      authorizations: [...this.authorizations.values()].map(item => structuredClone(item)),
+      authorizationByUser: [...this.authorizationByUser.entries()],
+      uploads: [...this.uploads.values()].map(item => structuredClone(item)),
+      uploadByHash: [...this.uploadByHash.entries()],
+      rawUploadBytes: [...this.rawUploadBytes.entries()].map(([id, bytes]) => [id, Buffer.from(bytes).toString('base64')]),
+      reports: [...this.reports.values()].map(item => structuredClone(item)),
+      authorities: [...this.authorities.values()].map(item => structuredClone(item)),
+      modules: [...this.modules.values()].map(item => structuredClone(item)),
+      rules: [...this.rules.values()].map(item => structuredClone(item)),
+      publishedRulesets: [...this.publishedRulesets.entries()].map(([version, rules]) => [version, rules.map(rule => structuredClone(rule))]),
+      publishedAuthorities: [...this.publishedAuthorities.values()].map(item => structuredClone(item)),
+      publishedModules: [...this.publishedModules.values()].map(item => structuredClone(item)),
+      matches: [...this.matches.values()].map(item => structuredClone(item)),
+      analyses: [...this.analyses.values()].map(item => structuredClone(item)),
+      consumerReports: [...this.consumerReports.values()].map(item => structuredClone(item)),
+      exports: [...this.exports.values()].map(item => structuredClone(item)),
+      deletionJobs: [...this.deletionJobs.values()].map(item => structuredClone(item)),
+      reviewers: [...this.reviewers.values()].map(item => structuredClone(item)),
+      pilotApprovals: [...this.pilotApprovals.values()].map(item => structuredClone(item)),
+      ...(this.launchScope ? { launchScope: structuredClone(this.launchScope) } : {}),
+      auditEvents: this.auditEvents.map(item => structuredClone(item)),
+    }
+  }
+
+  importSnapshot(snapshot: PlatformSnapshot): void {
+    this.users = new Map(snapshot.users.map(item => [item.id, structuredClone(item)]))
+    this.usersByEmail = new Map(snapshot.usersByEmail)
+    this.sessions = new Map(snapshot.sessions.map(item => [item.id, structuredClone(item)]))
+    this.workspaces = new Map(snapshot.workspaces.map(item => [item.id, structuredClone(item)]))
+    this.authorizations = new Map(snapshot.authorizations.map(item => [item.id, structuredClone(item)]))
+    this.authorizationByUser = new Map(snapshot.authorizationByUser)
+    this.uploads = new Map(snapshot.uploads.map(item => [item.id, structuredClone(item)]))
+    this.uploadByHash = new Map(snapshot.uploadByHash)
+    this.rawUploadBytes = new Map(snapshot.rawUploadBytes.map(([id, base64]) => [id, Buffer.from(base64, 'base64')]))
+    this.reports = new Map(snapshot.reports.map(item => [item.id, structuredClone(item)]))
+    this.authorities = new Map(snapshot.authorities.map(item => [item.id, structuredClone(item)]))
+    this.modules = new Map(snapshot.modules.map(item => [item.id, structuredClone(item)]))
+    this.rules = new Map(snapshot.rules.map(item => [item.id, structuredClone(item)]))
+    this.publishedRulesets = new Map(snapshot.publishedRulesets.map(([version, rules]) => [version, rules.map(rule => structuredClone(rule))]))
+    this.publishedAuthorities = new Map(snapshot.publishedAuthorities.map(item => [item.id, structuredClone(item)]))
+    this.publishedModules = new Map(snapshot.publishedModules.map(item => [item.id, structuredClone(item)]))
+    this.matches = new Map(snapshot.matches.map(item => [item.id, structuredClone(item)]))
+    this.analyses = new Map(snapshot.analyses.map(item => [item.id, structuredClone(item)]))
+    this.consumerReports = new Map(snapshot.consumerReports.map(item => [item.id, structuredClone(item)]))
+    this.exports = new Map(snapshot.exports.map(item => [item.id, structuredClone(item)]))
+    this.deletionJobs = new Map(snapshot.deletionJobs.map(item => [item.id, structuredClone(item)]))
+    this.reviewers = new Map(snapshot.reviewers.map(item => [item.id, structuredClone(item)]))
+    this.pilotApprovals = new Map(snapshot.pilotApprovals.map(item => [item.area, structuredClone(item)]))
+    this.launchScope = snapshot.launchScope ? structuredClone(snapshot.launchScope) : undefined
+    this.auditEvents = snapshot.auditEvents.map(item => structuredClone(item))
+  }
+
+  saveSnapshot(filePath: string): void {
+    writeFileSync(filePath, JSON.stringify(this.exportSnapshot(), null, 2))
+  }
+
+  loadSnapshot(filePath: string): void {
+    const parsed: unknown = JSON.parse(readFileSync(filePath, 'utf8'))
+    if (!parsed || typeof parsed !== 'object') throw new Error('Snapshot file is invalid')
+    this.importSnapshot(parsed as PlatformSnapshot)
   }
 
   getWorkspace(sessionId: Id, workspaceId: Id): Workspace { const userId = this.requireSession(sessionId); const workspace = this.workspaces.get(workspaceId); if (!workspace || workspace.userId !== userId) throw new Error('Not found'); return structuredClone(workspace) }

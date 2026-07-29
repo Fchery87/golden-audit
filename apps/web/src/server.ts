@@ -1,5 +1,5 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
-import { readFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { createHealthStatus } from '../../../packages/domain/src/index.js'
 import {
   CreditAnalysisPlatform,
@@ -10,15 +10,28 @@ import {
 } from '../../../packages/platform/src/index.js'
 
 const port = Number(process.env.WEB_PORT ?? 3000)
+const persistenceDir = process.env.PILOT_PERSISTENCE_DIR ?? '.scratch/runtime/web'
+const snapshotPath = `${persistenceDir}/platform-snapshot.json`
+if (!existsSync(persistenceDir)) mkdirSync(persistenceDir, { recursive: true })
 const platform = new CreditAnalysisPlatform()
 const approvalRecordPath = process.env.PILOT_APPROVAL_RECORD_PATH ?? 'docs/pilot-approval-records.json'
 const approvalRecords = JSON.parse(readFileSync(approvalRecordPath, 'utf8')) as PilotApprovalRecordFile
-const hydrated = platform.loadPilotApprovals(approvalRecords)
-const launchScope = hydrated.launchScope
-const launchScopeAvailabilityClaim = hydrated.fixtureOnly
+const fixtureOnly = approvalRecords.scope === 'test-fixture-only' || /fixture/i.test(approvalRecords.status) || /not approvals?/i.test(approvalRecords._warning ?? '')
+let hydratedLaunchScope = platform.hydrateLaunchScope(approvalRecords)
+if (existsSync(snapshotPath)) {
+  platform.loadSnapshot(snapshotPath)
+  hydratedLaunchScope = platform.getLaunchScope()
+} else {
+  platform.loadPilotApprovals(approvalRecords)
+  bootstrapPublishedRulesets(platform)
+  persistPlatform()
+  hydratedLaunchScope = platform.getLaunchScope()
+}
+const launchScope = platform.getLaunchScope()
+const launchScopeAvailabilityClaim = fixtureOnly
   ? 'Pilot currently limited to approved pilot states only.'
-  : (launchScope?.availabilityClaim ?? 'Pilot launch scope is not configured.')
-const publishedRulesetByJurisdiction = bootstrapPublishedRulesets(platform)
+  : launchScope.availabilityClaim
+const publishedRulesetByJurisdiction = getPublishedRulesetByJurisdiction(platform)
 
 type JsonRecord = Record<string, unknown>
 type ConsumerSessionHeader = { sessionId: string }
@@ -44,6 +57,10 @@ type ConsumerFlowSummary = {
   analysisId?: string
   consumerReportId?: string
   exportId?: string
+}
+
+function persistPlatform(): void {
+  platform.saveSnapshot(snapshotPath)
 }
 
 function bootstrapPublishedRulesets(app: CreditAnalysisPlatform): Partial<Record<Jurisdiction, string>> {
@@ -85,6 +102,13 @@ function bootstrapPublishedRulesets(app: CreditAnalysisPlatform): Partial<Record
   return {
     'US-CA': app.publishRuleset('web-release-manager', 'US-CA', '2026-07-01'),
   }
+}
+
+function getPublishedRulesetByJurisdiction(app: CreditAnalysisPlatform): Partial<Record<Jurisdiction, string>> {
+  const published = app.exportSnapshot().publishedRulesets
+  const californiaRuleset = published.find(([, rules]) => rules.some(rule => rule.jurisdiction === 'US-CA'))
+  if (!californiaRuleset) throw new Error('No published ruleset is available for US-CA')
+  return { 'US-CA': californiaRuleset[0] }
 }
 
 function respondJson(response: ServerResponse, statusCode: number, body: unknown): void {
@@ -130,7 +154,7 @@ function onboardingPayload(scope: LaunchScope | undefined): JsonRecord {
     blockedStateFollowUp: 'You may check back later as pilot availability expands.',
     boundary: 'This free pilot provides educational credit-report analysis only — not credit repair, disputes, score guarantees, or legal conclusions.',
     authorizationTransition: 'Before uploading a report, you will be asked to confirm that the report is yours or you are authorized to use it, that you are using this service for personal educational review, and that you understand how your report data will be used, retained, and deleted during this free pilot.',
-    fixtureOnly: hydrated.fixtureOnly,
+    fixtureOnly,
   }
 }
 
@@ -180,6 +204,7 @@ function kickoffAnalysisFlow(sessionId: string, uploadId: string, body: Analysis
 async function handleRegister(request: IncomingMessage, response: ServerResponse): Promise<void> {
   const body = await readJsonBody(request) as ConsumerRegisterBody
   const account = platform.register({ email: body.email, password: body.password })
+  persistPlatform()
   respondJson(response, 201, { sessionId: account.sessionId, userId: account.userId, launchScope: launchScope ?? null, onboarding: onboardingPayload(launchScope) })
 }
 
@@ -269,7 +294,7 @@ const server = createServer(async (request, response) => {
         availabilityClaim: launchScopeAvailabilityClaim,
         pricingMode: launchScope.pricingMode,
         nationwideStatus: launchScope.nationwideStatus,
-        fixtureOnly: hydrated.fixtureOnly,
+        fixtureOnly,
         stateChecked: normalizedState ?? null,
         statePrompt: 'Please confirm your state of residence.',
         continueHelperText: 'You can continue only if you currently reside in an approved pilot state.',

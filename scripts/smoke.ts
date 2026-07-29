@@ -28,7 +28,11 @@ try {
           req.end()
         })
         const parsed: unknown = JSON.parse(body)
-        if (JSON.stringify(parsed).includes(name)) return parsed
+        if (name === 'web') {
+          if (parsed && typeof parsed === 'object' && JSON.stringify(parsed).includes('onboarding')) return parsed
+        } else if (JSON.stringify(parsed).includes(name)) {
+          return parsed
+        }
       } catch {
         await new Promise(resolve => setTimeout(resolve, 50))
       }

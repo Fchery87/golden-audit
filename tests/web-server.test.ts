@@ -1,6 +1,9 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { once } from 'node:events'
 import { request } from 'node:http'
 
@@ -115,8 +118,9 @@ async function waitForServer(port: number): Promise<void> {
 
 test('web boundary publishes approved-state onboarding and pilot availability from launch scope fixtures', async () => {
   const port = 3199
+  const persistenceDir = mkdtempSync(join(tmpdir(), 'golden-audit-web-'))
   const child = spawn(process.execPath, ['--import', 'tsx', 'apps/web/src/server.ts'], {
-    env: { ...process.env, WEB_PORT: String(port) },
+    env: { ...process.env, WEB_PORT: String(port), PILOT_PERSISTENCE_DIR: persistenceDir },
     stdio: 'ignore',
   })
 
@@ -143,13 +147,15 @@ test('web boundary publishes approved-state onboarding and pilot availability fr
   } finally {
     child.kill()
     await once(child, 'exit').catch(() => undefined)
+    rmSync(persistenceDir, { recursive: true, force: true })
   }
 })
 
 test('web boundary supports the smallest real consumer pilot flow through analysis completion', async () => {
   const port = 3200
+  const persistenceDir = mkdtempSync(join(tmpdir(), 'golden-audit-web-'))
   const child = spawn(process.execPath, ['--import', 'tsx', 'apps/web/src/server.ts'], {
-    env: { ...process.env, WEB_PORT: String(port) },
+    env: { ...process.env, WEB_PORT: String(port), PILOT_PERSISTENCE_DIR: persistenceDir },
     stdio: 'ignore',
   })
 
@@ -232,5 +238,6 @@ test('web boundary supports the smallest real consumer pilot flow through analys
   } finally {
     child.kill()
     await once(child, 'exit').catch(() => undefined)
+    rmSync(persistenceDir, { recursive: true, force: true })
   }
 })
