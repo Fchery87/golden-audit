@@ -4,6 +4,11 @@ import { parseStructuredHtml } from './html-adapter.js'
 import { parseBboxHtml } from './bbox-extractor.js'
 import { parseIdentityIqPdf } from './identityiq-pdf-adapter.js'
 import type { ParserReport } from './types.js'
+
+export type ParserFieldObservation = { label: string; expected?: unknown; actual?: unknown }
+export type ParserFieldObservationOutcome = 'match' | 'missing' | 'unexpected'
+export type ParserFieldObservationResult = ParserFieldObservation & { outcome: ParserFieldObservationOutcome }
+export type ParserFieldEvaluation = { observations: number; matched: number; missing: number; unexpected: number; precision: number; recall: number; byLabel: ParserFieldObservationResult[] }
 import type { Word } from './positional-types.js'
 
 export type ParseResult = { report: ParserReport } | { unsupported: true; reason: string }
@@ -25,6 +30,41 @@ export function parseReportContent(rawContent: string): ParseResult {
   if (!adapter) return { unsupported: true, reason: `No adapter registered for format "${detected}"` }
   const { redacted } = redactReportText(rawContent)
   return { report: adapter(redacted) }
+}
+
+
+export function evaluateParserFields(observations: ParserFieldObservation[]): ParserFieldEvaluation {
+  let matched = 0
+  let missing = 0
+  let unexpected = 0
+  const byLabel = observations.map(observation => {
+    let outcome: ParserFieldObservationOutcome
+    if (observation.expected === undefined && observation.actual !== undefined) {
+      unexpected += 1
+      outcome = 'unexpected'
+    } else if (observation.expected !== undefined && observation.actual === undefined) {
+      missing += 1
+      outcome = 'missing'
+    } else if (Object.is(observation.expected, observation.actual)) {
+      matched += 1
+      outcome = 'match'
+    } else {
+      unexpected += 1
+      outcome = 'unexpected'
+    }
+    return { ...observation, outcome }
+  })
+  const totalExpected = observations.filter(observation => observation.expected !== undefined).length
+  const totalActual = observations.filter(observation => observation.actual !== undefined).length
+  return {
+    observations: observations.length,
+    matched,
+    missing,
+    unexpected,
+    precision: totalActual === 0 ? 1 : matched / totalActual,
+    recall: totalExpected === 0 ? 1 : matched / totalExpected,
+    byLabel,
+  }
 }
 
 /** Inbound trust boundary for the PDF path: strip identifier-bearing words before analysis. */

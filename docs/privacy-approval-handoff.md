@@ -11,6 +11,9 @@ Please review the attached privacy packet and reply with one of:
 - **approved with required edits**
 - **blocked**
 
+### Pilot scope
+Current California one-state pilot.
+
 ### Primary packet
 `docs/privacy-review-packet.md`
 
@@ -31,7 +34,7 @@ Please review the attached privacy packet and reply with one of:
 5. **Approver identity**: your name / role / accountable owner
 
 ### Highest-priority questions for this review
-- Is the notice-at-collection / transparency framing adequate for the free pilot?
+- Is the notice-at-collection / transparency framing adequate for the California one-state free pilot?
 - Are the retention / deletion statements specific enough?
 - Are access / correction / deletion rights described correctly for the intended pilot jurisdictions?
 - Are processor / sharing disclosures aligned with the current data-flow and product boundaries?

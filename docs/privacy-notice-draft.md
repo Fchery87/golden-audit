@@ -12,6 +12,8 @@ This draft assumes:
 - **no sale / no advertising / no training on report data**, and
 - a California / U.S.-only pilot.
 
+For the California pilot, the notice should not imply broader availability.
+
 ## 2. Information we collect
 
 We may collect the following categories of information:
@@ -88,6 +90,8 @@ Current product disclosures state that:
 
 The final notice should include approved retention periods for each major category.
 
+For the California pilot, retention language should stay aligned with the current data-flow and deletion model.
+
 ## 8. Sharing and processor categories
 
 We do not share report data with third parties for their own independent use.
@@ -100,6 +104,8 @@ We may use service providers / processors that help us operate the pilot, such a
 - an optional narration/model provider if that feature is enabled.
 
 Any such processor should be bound by contractual duties covering confidentiality, security, deletion/return, incident notification, and approved subprocessors.
+
+For the California pilot, list only processor categories that are actually used or expected to be used.
 
 ## 9. Consumer rights (draft framing)
 
@@ -119,6 +125,8 @@ We use administrative, technical, and physical safeguards designed to protect in
 ## 11. Children's information
 
 The pilot is intended for adults only. The current product gate requires the consumer to confirm they are an adult U.S. consumer.
+
+For the California pilot, rights language should not imply broader availability.
 
 ## 12. Changes to this notice
 

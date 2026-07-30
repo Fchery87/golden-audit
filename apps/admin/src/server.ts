@@ -2,7 +2,7 @@ import { createServer } from 'node:http'
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createHealthStatus } from '../../../packages/domain/src/index.js'
-import { CreditAnalysisPlatform, type PilotApprovalRecordFile, type PilotGate } from '../../../packages/platform/src/index.js'
+import { CreditAnalysisPlatform, type PilotApprovalRecordFile, type PilotDrillEvidenceReport, type PilotGate, type QualityReport } from '../../../packages/platform/src/index.js'
 import { loadPlatformRuntime, readRecentRuntimeEvents } from '../../web/src/runtime-store.js'
 
 const port = Number(process.env.ADMIN_PORT ?? 3002)
@@ -63,6 +63,29 @@ function runtimeEventItems(filter: string): string {
   return events.map((item: { kind: string; at: string; message?: string }) => `<li id="event-${item.kind}"><strong>${item.kind}</strong> <code>${item.at}</code> ${item.message ?? ''}</li>`).join('') || '<li id="event-none">none recorded</li>'
 }
 
+function evidenceSummary(): { gate: PilotGate; quality: QualityReport; drills: PilotDrillEvidenceReport } {
+  return {
+    gate: currentGate(),
+    quality: platform.getQualityReport(),
+    drills: platform.getPilotDrillEvidenceReport(),
+  }
+}
+
+function evidenceSection(): string {
+  const { gate, quality, drills } = evidenceSummary()
+  const topSegment = quality.segments[0]
+  return `<section>
+    <h2>Pilot evidence</h2>
+    <p>Ready: <strong>${gate.ready}</strong> · segments: <strong>${quality.segments.length}</strong> · drills: <strong>${drills.totalDrills}</strong></p>
+    <ul>
+      <li>Open approval areas: ${gate.missing.length > 0 ? escapeHtml(gate.missing.join(', ')) : 'none'}</li>
+      <li>Drill follow-ups: ${drills.openGaps.length > 0 ? drills.openGaps.length : 'none'}</li>
+      <li>Quality sample: ${topSegment ? `${escapeHtml(topSegment.provider)} / ${topSegment.documentType} / ${topSegment.jurisdiction}` : 'none recorded'}</li>
+    </ul>
+    <p><a href="/pilot-evidence">Open the JSON evidence feed</a></p>
+  </section>`
+}
+
 function htmlPage(gateFilter = '', eventFilter = ''): string {
   const gate = currentGate()
   const packetNav = packetLinks.map(([label, href]) => `<li><a href="${href}">${label}</a></li>`).join('')
@@ -101,6 +124,7 @@ function htmlPage(gateFilter = '', eventFilter = ''): string {
     </form>
   </section>
   <section><h2>Launch scope</h2><pre>${escapeHtml(JSON.stringify(gate.launchScope ?? null, null, 2))}</pre></section>
+  ${evidenceSection()}
   <section>
     <h2>Recorded approvals</h2>
     ${laneSectionList(gate, gateFilter)}
@@ -114,6 +138,11 @@ const server = createServer((request, response) => {
   if (request.method === 'GET' && url.pathname === '/health') {
     response.writeHead(200, { 'content-type': 'application/json; charset=utf-8' })
     response.end(JSON.stringify(createHealthStatus('admin')))
+    return
+  }
+  if (request.method === 'GET' && url.pathname === '/pilot-evidence') {
+    response.writeHead(200, { 'content-type': 'application/json; charset=utf-8' })
+    response.end(JSON.stringify(evidenceSummary()))
     return
   }
   if (request.method === 'GET' && url.pathname === '/gate') {

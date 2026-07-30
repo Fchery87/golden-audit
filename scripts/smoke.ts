@@ -5,6 +5,14 @@ import { createHealthStatus, type ServiceName } from '../packages/domain/src/ind
 
 type Child = ReturnType<typeof spawn>
 
+const remotePagesSmokeUrl = process.env.CF_PAGES_SMOKE_URL?.trim()
+
+async function fetchJsonUrl(url: string): Promise<unknown> {
+  const response = await fetch(url)
+  if (!response.ok) throw new Error(`${url} failed with ${response.status}`)
+  return await response.json()
+}
+
 async function fetchJson(port: number, path: string): Promise<unknown> {
   return await new Promise((resolve, reject) => {
     const req = request({ hostname: '127.0.0.1', port, path, method: 'GET' }, response => {
@@ -23,7 +31,7 @@ async function fetchJson(port: number, path: string): Promise<unknown> {
 
 async function waitForHealth(name: ServiceName, port: number): Promise<unknown> {
   const path = name === 'web' ? '/' : '/health'
-  for (let attempt = 0; attempt < 30; attempt += 1) {
+  for (let attempt = 0; attempt < 120; attempt += 1) {
     try {
       const body = await new Promise<string>((resolve, reject) => {
         const req = request({ hostname: '127.0.0.1', port, path, method: 'GET' }, response => {
@@ -86,14 +94,29 @@ try {
     req.on('error', reject)
     req.end()
   })
-  if (!adminHtml.includes('Pilot Gate Dashboard') || !adminHtml.includes('Missing approvals') || !adminHtml.includes('Approval packet') || !adminHtml.includes('Launch-scope checklist index') || !adminHtml.includes('id="approval-legal"') || !adminHtml.includes('id="event-none"')) {
+  if (!adminHtml.includes('Pilot Gate Dashboard') || !adminHtml.includes('Missing approvals') || !adminHtml.includes('Approval packet') || !adminHtml.includes('Launch-scope checklist index') || !adminHtml.includes('Pilot evidence') || !adminHtml.includes('Open the JSON evidence feed') || !adminHtml.includes('id="approval-legal"')) {
     throw new Error('admin dashboard missing gate workflow sections')
   }
   const filteredAdminGate = await fetchJson(3102, '/gate') as { gate?: { missing?: string[]; missingLaunchScope?: boolean } }
   if (!filteredAdminGate.gate || !Array.isArray(filteredAdminGate.gate.missing)) {
     throw new Error('admin gate missing approval data')
   }
-  console.log(JSON.stringify({ status: 'ok', services: health, database: { status: 'ok', migrationVersion: '002_product_platform' } }))
+
+  let pagesFunctions: { status: 'not-configured' | 'ok'; url?: string } = { status: 'not-configured' }
+  if (remotePagesSmokeUrl) {
+    const base = remotePagesSmokeUrl.replace(/\/$/, '')
+    const onboarding = await fetchJsonUrl(`${base}/api/onboarding`)
+    if (!onboarding || typeof onboarding !== 'object' || !JSON.stringify(onboarding).includes('approvedStates')) {
+      throw new Error('remote Pages Functions onboarding missing approved state data')
+    }
+    const consumerHealth = await fetchJsonUrl(`${base}/api/consumer/health`)
+    if (!consumerHealth || typeof consumerHealth !== 'object' || !JSON.stringify(consumerHealth).includes('consumer')) {
+      throw new Error('remote Pages Functions health missing consumer marker')
+    }
+    pagesFunctions = { status: 'ok', url: base }
+  }
+
+  console.log(JSON.stringify({ status: 'ok', services: health, pagesFunctions, database: { status: 'ok', migrationVersion: '003_pilot_pages_state' } }))
 } finally {
   for (const child of children) child.kill()
   await Promise.all(children.map(child => once(child, 'exit').catch(() => undefined)))

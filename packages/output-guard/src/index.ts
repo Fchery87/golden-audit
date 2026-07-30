@@ -71,6 +71,9 @@ export const FORBIDDEN_UPL_TERMS = [
 ] as const
 
 export type OutputValidation = { ok: boolean; violations: string[] }
+export type NarrationEvaluationInput = { text: string; analysis: { findings: Array<{ title: string; limitations: string[] }> } }
+export type NarrationCitationCoverage = { totalFindings: number; coveredFindings: number; missingFindings: number; coveredLimitations: number; missingLimitations: number }
+export type NarrationEvaluation = { safe: boolean; violations: string[]; citationCoverage: NarrationCitationCoverage }
 
 export function validateConsumerOutput(text: string): OutputValidation {
   const violations: string[] = []
@@ -82,8 +85,22 @@ export function validateConsumerOutput(text: string): OutputValidation {
   return { ok: violations.length === 0, violations }
 }
 
-/** Fail-closed boundary check. Call at every consumer-facing output path. */
 export function assertSafeConsumerOutput(text: string): void {
   const { ok, violations } = validateConsumerOutput(text)
   if (!ok) throw new Error(`Output blocked at trust boundary: ${violations.join(', ')}`)
+}
+
+export function evaluateNarrationOutput(input: NarrationEvaluationInput): NarrationEvaluation {
+  const validation = validateConsumerOutput(input.text)
+  const citationCoverage = input.analysis.findings.reduce<NarrationCitationCoverage>((acc, finding) => {
+    const findingCovered = input.text.includes(finding.title)
+    if (findingCovered) acc.coveredFindings += 1
+    else acc.missingFindings += 1
+    for (const limitation of finding.limitations) {
+      if (input.text.includes(limitation)) acc.coveredLimitations += 1
+      else acc.missingLimitations += 1
+    }
+    return acc
+  }, { totalFindings: input.analysis.findings.length, coveredFindings: 0, missingFindings: 0, coveredLimitations: 0, missingLimitations: 0 })
+  return { safe: validation.ok, violations: validation.violations, citationCoverage }
 }

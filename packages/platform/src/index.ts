@@ -3,11 +3,13 @@ import { readFileSync, writeFileSync } from 'node:fs'
 import { applicationVersion } from '../../domain/src/index.js'
 import { evaluateAnalysis, SEVERITY_RANK } from '../../analysis-core/src/index.js'
 import { redactReportText } from '../../redaction/src/index.js'
-import { assertSafeConsumerOutput } from '../../output-guard/src/index.js'
+import { assertSafeConsumerOutput, type NarrationEvaluation } from '../../output-guard/src/index.js'
 import { execSync } from 'node:child_process'
 import { parseIdentityIqPdfBbox } from '../../parser/src/index.js'
 import type { ParserReport, ParserTradeline, ParserValue } from '../../parser/src/index.js'
 import type { Analysis as CoreAnalysis, Finding, FindingClassification, RuleAudit, SourceReference } from '../../analysis-core/src/index.js'
+import type { AccessibilityEvidenceReport } from '../../../apps/web/src/accessibility-report.js'
+import type { ComprehensionEvidenceReport } from '../../../apps/web/src/comprehension-report.js'
 
 export type { Finding, FindingClassification, RuleAudit, SourceReference }
 export type Id = string
@@ -178,6 +180,36 @@ export type AuditEvent = { type: string; actorId: Id; subjectId: Id; at: string;
 export type PilotApprovalArea = 'product' | 'legal' | 'privacy' | 'security' | 'operations' | 'accessibility' | 'vendor'
 export type PilotApproval = { area: PilotApprovalArea; approver: string; evidenceReference: string; approvedAt: string }
 export type PilotGate = { ready: boolean; missing: PilotApprovalArea[]; approvals: PilotApproval[]; launchScope?: LaunchScope; missingLaunchScope: boolean }
+export type PilotDrillResult = 'passed' | 'passed-with-gaps' | 'blocked'
+export type PilotDrill = { id: Id; scenario: string; owner: string; result: PilotDrillResult; gaps: string[]; followUpTicket: string; recordedAt: string }
+export type PilotDrillEvidenceGap = {
+  scenario: string
+  owner: string
+  result: Extract<PilotDrillResult, 'passed-with-gaps' | 'blocked'>
+  gaps: string[]
+  followUpTicket: string
+}
+export type PilotDrillEvidenceReport = {
+  generatedAt: string
+  totalDrills: number
+  outcomes: Record<PilotDrillResult, number>
+  openGaps: PilotDrillEvidenceGap[]
+  followUpTickets: string[]
+}
+export type PilotEvidenceSummary = {
+  openApprovalAreas: PilotApprovalArea[]
+  failingEvidenceSurfaces: Array<'comprehension' | 'accessibility' | 'narration' | 'drills'>
+}
+export type PilotEvidenceBundle = {
+  generatedAt: string
+  pilotGate: PilotGate
+  quality: QualityReport
+  drills: PilotDrillEvidenceReport
+  comprehension: ComprehensionEvidenceReport
+  accessibility: AccessibilityEvidenceReport
+  narration?: NarrationEvaluation
+  summary: PilotEvidenceSummary
+}
 export type PilotApprovalRecordFile = {
   _warning?: string
   scope: string
@@ -194,6 +226,48 @@ export type PilotApprovalRecordFile = {
     notes: string
   }
   approvals: Array<{ area: PilotApprovalArea; approver: string; evidenceReference: string }>
+}
+export type QualityLatencySummary = { sampleSize: number; averageMs: number; maxMs: number }
+export type QualityFindingSummary = {
+  total: number
+  averagePerAnalysis: number
+  bySeverity: Record<'low' | 'medium' | 'high', number>
+  byClassification: Record<FindingClassification, number>
+}
+export type QualityMatchingSummary = {
+  proposedGroups: number
+  confirmedGroups: number
+  highConfidenceProposals: number
+  splitGroups: number
+}
+export type QualityParserSummary = {
+  reportsWithTradelines: number
+  averageTradelinesPerReport: number
+}
+export type QualityReportSegment = {
+  provider: string
+  documentType: 'pdf' | 'html'
+  jurisdiction: Jurisdiction
+  uploads: number
+  parsedReports: number
+  analyses: number
+  findings: QualityFindingSummary
+  matching: QualityMatchingSummary
+  parser: QualityParserSummary
+  latency: {
+    uploadToParse: QualityLatencySummary
+    parseToAnalysis: QualityLatencySummary
+  }
+}
+export type QualityReport = {
+  generatedAt: string
+  segments: QualityReportSegment[]
+}
+
+type TimestampRecord = {
+  uploadCompletedAt?: string
+  reportParsedAt?: string
+  analysisCreatedAt?: string
 }
 
 export type PlatformSnapshot = {
@@ -220,6 +294,7 @@ export type PlatformSnapshot = {
   deletionJobs: DeletionJob[]
   reviewers: Reviewer[]
   pilotApprovals: PilotApproval[]
+  pilotDrills: PilotDrill[]
   launchScope?: LaunchScope
   auditEvents: AuditEvent[]
 }
@@ -253,7 +328,9 @@ export class CreditAnalysisPlatform {
   private rawUploadBytes = new Map<Id, Uint8Array>()
   private reviewers = new Map<Id, Reviewer>()
   private pilotApprovals = new Map<PilotApprovalArea, PilotApproval>()
+  private pilotDrills: PilotDrill[] = []
   private launchScope: LaunchScope | undefined
+  private timelineBySubject = new Map<Id, TimestampRecord>()
   auditEvents: AuditEvent[] = []
 
   register(input: { email: string; password: string }): { userId: Id; sessionId: Id } {
@@ -375,6 +452,7 @@ export class CreditAnalysisPlatform {
       deletionJobs: [...this.deletionJobs.values()].map(item => structuredClone(item)),
       reviewers: [...this.reviewers.values()].map(item => structuredClone(item)),
       pilotApprovals: [...this.pilotApprovals.values()].map(item => structuredClone(item)),
+      pilotDrills: this.pilotDrills.map(item => structuredClone(item)),
       ...(this.launchScope ? { launchScope: structuredClone(this.launchScope) } : {}),
       auditEvents: this.auditEvents.map(item => structuredClone(item)),
     }
@@ -404,6 +482,7 @@ export class CreditAnalysisPlatform {
     this.deletionJobs = new Map(snapshot.deletionJobs.map(item => [item.id, structuredClone(item)]))
     this.reviewers = new Map(snapshot.reviewers.map(item => [item.id, structuredClone(item)]))
     this.pilotApprovals = new Map(snapshot.pilotApprovals.map(item => [item.area, structuredClone(item)]))
+    this.pilotDrills = (snapshot.pilotDrills ?? []).map(item => structuredClone(item))
     this.launchScope = snapshot.launchScope ? structuredClone(snapshot.launchScope) : undefined
     this.auditEvents = snapshot.auditEvents.map(item => structuredClone(item))
   }
@@ -446,6 +525,7 @@ export class CreditAnalysisPlatform {
     upload.fileName = input.fileName; upload.mediaType = isPdf ? 'application/pdf' : 'text/html'; upload.size = content.byteLength; upload.sourceHash = sourceHash; upload.scanResult = 'clean'; upload.retentionClass = 'consumer-report'; upload.stage = 'ready-to-parse'
     if (isPdf) { this.rawUploadBytes.set(upload.id, content) } else { const raw = content.toString('utf8'); const sanitized = raw.replace(/<script[\s\S]*?<\/script>/gi, ''); const { redacted, redactions } = redactReportText(sanitized); upload.sanitizedContent = redacted; upload.redactionCount = redactions }
     upload.completedAt = now(); this.uploadByHash.set(`${upload.userId}:${sourceHash}`, upload.id)
+    this.recordTimestamp(upload.id, { uploadCompletedAt: upload.completedAt })
     this.audit('upload-completed', upload.userId, upload.id, { mediaType: upload.mediaType, sourceHash }); return structuredClone(upload)
   }
 
@@ -463,7 +543,8 @@ export class CreditAnalysisPlatform {
     const tradelines = input.tradelines.map((line, index): Tradeline => ({ id: randomUUID(), creditor: makeValue(line.bureau, 'creditor', line.creditor, line.creditor, `${index}:creditor`), maskedAccount: makeValue(line.bureau, 'account', maskAccount(line.account), maskAccount(line.account), `${index}:account`), accountType: makeValue(line.bureau, 'accountType', line.accountType, line.accountType, `${index}:type`), balance: { ...makeValue(line.bureau, 'balance', line.balance, `$${(line.balance / 100).toFixed(2)}`, `${index}:balance`, line.confidence ?? 1), currency: 'USD' }, status: makeValue(line.bureau, 'status', line.status, line.status, `${index}:status`), opened: { ...makeValue(line.bureau, 'opened', line.opened, line.opened, `${index}:opened`), datePrecision: line.opened.length === 7 ? 'month' : 'day' }, updated: { ...makeValue(line.bureau, 'updated', line.updated, line.updated, `${index}:updated`), datePrecision: line.updated.length === 7 ? 'month' : 'day' } }))
     const firstBureau = input.tradelines[0]?.bureau ?? 'equifax'; const mapText = (items: string[], field: string) => items.map((value, i) => makeValue(firstBureau, field, value, value, `${field}:${i}`))
     const report: CanonicalReport = { id: randomUUID(), userId, uploadId, provider: input.provider, template: input.template, parserVersion, normalizedVersion: 1, reportDate: input.reportDate, identity: mapText(input.identity, 'identity'), addresses: mapText(input.addresses, 'address'), employers: mapText(input.employers, 'employer'), tradelines, collections: [], inquiries: mapText(input.inquiries, 'inquiry'), publicRecords: mapText(input.publicRecords, 'publicRecord'), scores: input.scores.map((score, i) => makeValue(firstBureau, 'score', score, String(score), `score:${i}`)), remarks: mapText(input.remarks, 'remark'), reviewComplete: false }
-    this.reports.set(report.id, report); this.audit('report-parsed', userId, report.id, { parserVersion }); return structuredClone(report)
+    const parsedAt = now()
+    this.reports.set(report.id, report); this.recordTimestamp(report.id, { reportParsedAt: parsedAt, ...(upload.completedAt ? { uploadCompletedAt: upload.completedAt } : {}) }); this.audit('report-parsed', userId, report.id, { parserVersion }); return structuredClone(report)
   }
 
   reviewValue(sessionId: Id, reportId: Id, valueId: Id, input: { decision: ReviewDecision; reason: string; replacement?: string | number }): CanonicalReport {
@@ -479,7 +560,8 @@ export class CreditAnalysisPlatform {
     const parsed = parseIdentityIqPdfBbox(extractBboxFromPdfBytes(bytes))
     if (parsed.tradelines.length === 0) throw new Error('Unsupported report provider or template') // reject rather than guess
     const report = mapParserReportToCanonical(parsed, userId, upload.id)
-    this.reports.set(report.id, report); this.audit('report-parsed', userId, report.id, { parserVersion: report.parserVersion })
+    const parsedAt = now()
+    this.reports.set(report.id, report); this.recordTimestamp(report.id, { reportParsedAt: parsedAt, ...(upload.completedAt ? { uploadCompletedAt: upload.completedAt } : {}) }); this.audit('report-parsed', userId, report.id, { parserVersion: report.parserVersion })
     return structuredClone(report)
   }
   getSourceSnippet(sessionId: Id, reportId: Id, valueId: Id): SourceReference { const userId = this.requireSession(sessionId); const report = this.reports.get(reportId); if (!report || report.userId !== userId) throw new Error('Not found'); const value = allValues(report).find(item => item.id === valueId); if (!value) throw new Error('Not found'); return structuredClone(value.source) }
@@ -555,7 +637,8 @@ export class CreditAnalysisPlatform {
 
   runAnalysis(sessionId: Id, reportId: Id, rulesetVersion: string, jurisdiction: Jurisdiction): Analysis { const userId = this.requireSession(sessionId); const report = this.reports.get(reportId); if (!report || report.userId !== userId) throw new Error('Not found'); if (!report.reviewComplete) throw new Error('Report review is incomplete'); const unresolvedMatches = [...this.matches.values()].filter(match => match.reportId === reportId && match.state === 'proposed'); if (unresolvedMatches.length) throw new Error('Account matching confirmation is incomplete'); const rules = this.publishedRulesets.get(rulesetVersion); if (!rules) throw new Error('Ruleset not found')
     const core = evaluateAnalysis({ rules, tradelines: report.tradelines, confirmedMatches: [...this.matches.values()].filter(match => match.reportId === reportId && match.state === 'confirmed').map(match => ({ tradelineIds: match.tradelineIds })), versions: { normalizedInput: report.normalizedVersion, ruleset: rulesetVersion, jurisdiction, parser: report.parserVersion, application: applicationVersion } })
-    const analysis: Analysis = { ...core, userId, reportId }; this.analyses.set(analysis.id, analysis); this.audit('analysis-created', userId, analysis.id, { rulesetVersion }); return structuredClone(analysis) }
+    const parsedAt = this.timelineBySubject.get(report.id)?.reportParsedAt
+    const analysis: Analysis = { ...core, userId, reportId }; this.analyses.set(analysis.id, analysis); this.recordTimestamp(analysis.id, { analysisCreatedAt: analysis.createdAt, ...(parsedAt ? { reportParsedAt: parsedAt } : {}) }); this.audit('analysis-created', userId, analysis.id, { rulesetVersion }); return structuredClone(analysis) }
 
   getAnalysis(sessionId: Id, analysisId: Id): Analysis { const userId = this.requireSession(sessionId); const analysis = this.analyses.get(analysisId); if (!analysis || analysis.userId !== userId) throw new Error('Not found'); return structuredClone(analysis) }
 
@@ -600,6 +683,108 @@ export class CreditAnalysisPlatform {
     this.audit('pilot-approval-recorded', input.approver, input.area, { evidenceReference: input.evidenceReference })
     return structuredClone(approval)
   }
+  recordPilotDrill(input: { scenario: string; owner: string; result: PilotDrillResult; gaps: string[]; followUpTicket: string }): PilotDrill {
+    if (!input.scenario.trim() || !input.owner.trim() || !input.followUpTicket.trim()) throw new Error('Pilot drill requires scenario, owner, and follow-up ticket')
+    const drill: PilotDrill = { id: randomUUID(), ...input, gaps: [...input.gaps], recordedAt: now() }
+    this.pilotDrills.push(drill)
+    this.audit('pilot-drill-recorded', input.owner, drill.id, { scenario: input.scenario, result: input.result, followUpTicket: input.followUpTicket })
+    return structuredClone(drill)
+  }
+  getPilotDrills(): PilotDrill[] {
+    return this.pilotDrills.map(item => structuredClone(item))
+  }
+  getPilotDrillEvidenceReport(): PilotDrillEvidenceReport {
+    const outcomes: Record<PilotDrillResult, number> = {
+      passed: 0,
+      'passed-with-gaps': 0,
+      blocked: 0,
+    }
+    const openGaps: PilotDrillEvidenceGap[] = []
+    const followUpTickets = new Set<string>()
+
+    for (const drill of this.pilotDrills) {
+      outcomes[drill.result] += 1
+      followUpTickets.add(drill.followUpTicket)
+      if (drill.result !== 'passed') {
+        openGaps.push({
+          scenario: drill.scenario,
+          owner: drill.owner,
+          result: drill.result,
+          gaps: [...drill.gaps],
+          followUpTicket: drill.followUpTicket,
+        })
+      }
+    }
+
+    return {
+      generatedAt: now(),
+      totalDrills: this.pilotDrills.length,
+      outcomes,
+      openGaps,
+      followUpTickets: [...followUpTickets],
+    }
+  }
+  getPilotEvidenceBundle(input: { comprehension: ComprehensionEvidenceReport; accessibility: AccessibilityEvidenceReport; narration?: NarrationEvaluation }): PilotEvidenceBundle {
+    const pilotGate = this.getPilotGate()
+    const quality = this.getQualityReport()
+    const drills = this.getPilotDrillEvidenceReport()
+    const failingEvidenceSurfaces: PilotEvidenceSummary['failingEvidenceSurfaces'] = []
+    if (!input.comprehension.passed) failingEvidenceSurfaces.push('comprehension')
+    if (!input.accessibility.passed) failingEvidenceSurfaces.push('accessibility')
+    if (drills.openGaps.length > 0) failingEvidenceSurfaces.push('drills')
+    if (input.narration && !input.narration.safe) failingEvidenceSurfaces.push('narration')
+    return {
+      generatedAt: now(),
+      pilotGate,
+      quality,
+      drills,
+      comprehension: structuredClone(input.comprehension),
+      accessibility: structuredClone(input.accessibility),
+      ...(input.narration ? { narration: structuredClone(input.narration) } : {}),
+      summary: {
+        openApprovalAreas: [...pilotGate.missing],
+        failingEvidenceSurfaces,
+      },
+    }
+  }
+  renderPilotReviewerMarkdown(input: { comprehension: ComprehensionEvidenceReport; accessibility: AccessibilityEvidenceReport; narration?: NarrationEvaluation }): string {
+    const bundle = this.getPilotEvidenceBundle(input)
+    const lines = [
+      '# Pilot reviewer export',
+      '',
+      `Generated at: ${bundle.generatedAt}`,
+      `Pilot gate: ${bundle.pilotGate.ready ? 'ready' : 'not ready'}`,
+      `Open approval areas: ${bundle.summary.openApprovalAreas.length > 0 ? bundle.summary.openApprovalAreas.join(', ') : 'none'}`,
+      `Failing evidence surfaces: ${bundle.summary.failingEvidenceSurfaces.length > 0 ? bundle.summary.failingEvidenceSurfaces.join(', ') : 'none'}`,
+      '',
+      '## Approvals',
+      '',
+      ...(bundle.pilotGate.approvals.length > 0
+        ? bundle.pilotGate.approvals.map(approval => `- ${approval.area}: ${approval.approver} (${approval.evidenceReference})`)
+        : ['- None.']),
+      '',
+      '## Evidence surfaces',
+      '',
+      `- Comprehension: ${bundle.comprehension.passed ? 'passing' : 'failing'} (${bundle.comprehension.coverage.passedChecks}/${bundle.comprehension.coverage.totalChecks} checks passed${bundle.comprehension.missing.length > 0 ? `; missing: ${bundle.comprehension.missing.join(', ')}` : ''})`,
+      `- Accessibility: ${bundle.accessibility.passed ? 'passing' : 'failing'} (${bundle.accessibility.coverage.passedChecks}/${bundle.accessibility.coverage.totalChecks} checks passed${bundle.accessibility.missing.length > 0 ? `; missing: ${bundle.accessibility.missing.join(', ')}` : ''})`,
+      `- Drills: ${bundle.drills.openGaps.length === 0 ? 'passing' : 'failing'} (${bundle.drills.totalDrills} recorded; open gaps: ${bundle.drills.openGaps.length})`,
+      `- Quality: ${bundle.quality.segments.length} segment${bundle.quality.segments.length === 1 ? '' : 's'} recorded`,
+      ...(bundle.narration
+        ? [`- Narration: ${bundle.narration.safe ? 'passing' : 'failing'}${bundle.narration.safe ? '' : ` (violations: ${bundle.narration.violations.join(', ')})`}`]
+        : []),
+      '',
+      '## Drill follow-ups',
+      '',
+      ...(bundle.drills.openGaps.length > 0
+        ? bundle.drills.openGaps.map(gap => `- ${gap.scenario} — ${gap.result} — owner: ${gap.owner} — follow-up: ${gap.followUpTicket}`)
+        : ['- None.']),
+    ]
+    return lines.join('\n')
+  }
+  renderPilotReviewerJson(input: { comprehension: ComprehensionEvidenceReport; accessibility: AccessibilityEvidenceReport; narration?: NarrationEvaluation }): string {
+    const bundle = this.getPilotEvidenceBundle(input)
+    return JSON.stringify({ ...bundle, markdown: this.renderPilotReviewerMarkdown(input) }, null, 2)
+  }
   getPilotGate(): PilotGate {
     const required: PilotApprovalArea[] = ['product', 'legal', 'privacy', 'security', 'operations', 'accessibility', 'vendor']
     const missing = required.filter(area => !this.pilotApprovals.has(area))
@@ -616,6 +801,150 @@ export class CreditAnalysisPlatform {
     if (gate.missingLaunchScope) throw new Error('Pilot launch scope is not configured')
     if (!gate.ready) throw new Error(`Pilot approvals incomplete: ${gate.missing.join(', ')}`)
   }
+  private recordTimestamp(subjectId: Id, patch: Partial<TimestampRecord>): void {
+    const existing = this.timelineBySubject.get(subjectId) ?? {}
+    this.timelineBySubject.set(subjectId, { ...existing, ...patch })
+  }
+
+  private getLatencySummary(values: number[]): QualityLatencySummary {
+    if (values.length === 0) return { sampleSize: 0, averageMs: 0, maxMs: 0 }
+    const total = values.reduce((sum, value) => sum + value, 0)
+    return { sampleSize: values.length, averageMs: total / values.length, maxMs: Math.max(...values) }
+  }
+
+  getQualityReport(): QualityReport {
+    const segments = new Map<string, QualityReportSegment>()
+
+    const getSegment = (provider: string, documentType: 'pdf' | 'html', jurisdiction: Jurisdiction): QualityReportSegment => {
+      const key = `${provider}|${documentType}|${jurisdiction}`
+      const existing = segments.get(key)
+      if (existing) return existing
+      const created: QualityReportSegment = {
+        provider,
+        documentType,
+        jurisdiction,
+        uploads: 0,
+        parsedReports: 0,
+        analyses: 0,
+        findings: {
+          total: 0,
+          averagePerAnalysis: 0,
+          bySeverity: { low: 0, medium: 0, high: 0 },
+          byClassification: {
+            'observed-fact': 0,
+            'inconsistency': 0,
+            'potential-error': 0,
+            'verification-recommended': 0,
+            'potential-compliance-concern': 0,
+            'insufficient-information': 0,
+            'educational-opportunity': 0,
+          },
+        },
+        matching: {
+          proposedGroups: 0,
+          confirmedGroups: 0,
+          highConfidenceProposals: 0,
+          splitGroups: 0,
+        },
+        parser: {
+          reportsWithTradelines: 0,
+          averageTradelinesPerReport: 0,
+        },
+        latency: {
+          uploadToParse: { sampleSize: 0, averageMs: 0, maxMs: 0 },
+          parseToAnalysis: { sampleSize: 0, averageMs: 0, maxMs: 0 },
+        },
+      }
+      segments.set(key, created)
+      return created
+    }
+
+    const uploadToParseByKey = new Map<string, number[]>()
+    const parseToAnalysisByKey = new Map<string, number[]>()
+    const tradelineCountsByKey = new Map<string, number[]>()
+
+    for (const upload of this.uploads.values()) {
+      if (upload.stage !== 'ready-to-parse' || !upload.mediaType) continue
+      const user = this.users.get(upload.userId)
+      const jurisdiction = user?.consent?.analysisJurisdiction
+      if (!jurisdiction) continue
+      const provider = [...this.reports.values()].find(report => report.uploadId === upload.id)?.provider ?? 'unknown'
+      const documentType = upload.mediaType === 'application/pdf' ? 'pdf' : 'html'
+      const key = `${provider}|${documentType}|${jurisdiction}`
+      getSegment(provider, documentType, jurisdiction).uploads += 1
+      uploadToParseByKey.set(key, uploadToParseByKey.get(key) ?? [])
+      parseToAnalysisByKey.set(key, parseToAnalysisByKey.get(key) ?? [])
+      tradelineCountsByKey.set(key, tradelineCountsByKey.get(key) ?? [])
+    }
+
+    for (const report of this.reports.values()) {
+      const upload = this.uploads.get(report.uploadId)
+      if (!upload?.mediaType) continue
+      const user = this.users.get(report.userId)
+      const jurisdiction = user?.consent?.analysisJurisdiction
+      if (!jurisdiction) continue
+      const documentType = upload.mediaType === 'application/pdf' ? 'pdf' : 'html'
+      const key = `${report.provider}|${documentType}|${jurisdiction}`
+      const segment = getSegment(report.provider, documentType, jurisdiction)
+      segment.parsedReports += 1
+      if (report.tradelines.length > 0) segment.parser.reportsWithTradelines += 1
+      ;(tradelineCountsByKey.get(key) ?? []).push(report.tradelines.length)
+      const times = this.timelineBySubject.get(report.id)
+      if (times?.uploadCompletedAt && times.reportParsedAt) {
+        const delta = Date.parse(times.reportParsedAt) - Date.parse(times.uploadCompletedAt)
+        if (Number.isFinite(delta) && delta >= 0) (uploadToParseByKey.get(key) ?? []).push(delta)
+      }
+    }
+
+    for (const match of this.matches.values()) {
+      const report = this.reports.get(match.reportId)
+      if (!report) continue
+      const upload = this.uploads.get(report.uploadId)
+      if (!upload?.mediaType) continue
+      const user = this.users.get(report.userId)
+      const jurisdiction = user?.consent?.analysisJurisdiction
+      if (!jurisdiction) continue
+      const documentType = upload.mediaType === 'application/pdf' ? 'pdf' : 'html'
+      const segment = getSegment(report.provider, documentType, jurisdiction)
+      segment.matching.proposedGroups += 1
+      if (match.confidence >= 0.9) segment.matching.highConfidenceProposals += 1
+      if (match.state === 'confirmed') segment.matching.confirmedGroups += 1
+      if (match.state === 'split' || match.confidence < 0.9) segment.matching.splitGroups += 1
+    }
+
+    for (const analysis of this.analyses.values()) {
+      const report = this.reports.get(analysis.reportId)
+      if (!report) continue
+      const upload = this.uploads.get(report.uploadId)
+      if (!upload?.mediaType) continue
+      const jurisdiction = analysis.versions.jurisdiction as Jurisdiction
+      const documentType = upload.mediaType === 'application/pdf' ? 'pdf' : 'html'
+      const key = `${report.provider}|${documentType}|${jurisdiction}`
+      const segment = getSegment(report.provider, documentType, jurisdiction)
+      segment.analyses += 1
+      segment.findings.total += analysis.findings.length
+      for (const finding of analysis.findings) {
+        segment.findings.bySeverity[finding.severity] += 1
+        segment.findings.byClassification[finding.classification] += 1
+      }
+      const times = this.timelineBySubject.get(analysis.id)
+      if (times?.reportParsedAt && times.analysisCreatedAt) {
+        const delta = Date.parse(times.analysisCreatedAt) - Date.parse(times.reportParsedAt)
+        if (Number.isFinite(delta) && delta >= 0) (parseToAnalysisByKey.get(key) ?? []).push(delta)
+      }
+    }
+
+    for (const [key, segment] of segments.entries()) {
+      segment.findings.averagePerAnalysis = segment.analyses === 0 ? 0 : segment.findings.total / segment.analyses
+      const tradelineCounts = tradelineCountsByKey.get(key) ?? []
+      segment.parser.averageTradelinesPerReport = tradelineCounts.length === 0 ? 0 : tradelineCounts.reduce((sum, value) => sum + value, 0) / tradelineCounts.length
+      segment.latency.uploadToParse = this.getLatencySummary(uploadToParseByKey.get(key) ?? [])
+      segment.latency.parseToAnalysis = this.getLatencySummary(parseToAnalysisByKey.get(key) ?? [])
+    }
+
+    return { generatedAt: now(), segments: [...segments.values()].map(segment => structuredClone(segment)) }
+  }
+
   getAuditEvents(sessionId: Id): AuditEvent[] { const userId = this.requireSession(sessionId); return this.auditEvents.filter(event => event.actorId === userId).map(event => structuredClone(event)) }
   private requireSession(sessionId: Id): Id { const session = this.sessions.get(sessionId); if (!session || session.revokedAt) throw new Error('Authentication required'); return session.userId }
   private audit(type: string, actorId: Id, subjectId: Id, metadata: Record<string, string> = {}): void { this.auditEvents.push({ type, actorId, subjectId, at: now(), metadata }) }

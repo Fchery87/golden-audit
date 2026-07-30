@@ -4,7 +4,7 @@
 
 ## 1. Objective
 
-Identify reasonably foreseeable internal and external risks to consumer report information, score those risks, map existing controls, and document remediation or acceptance decisions.
+Identify reasonably foreseeable internal and external risks to consumer report information, score those risks, map existing controls, and document remediation or acceptance decisions for the current California one-state pilot.
 
 Use this template together with:
 - `docs/data-flow.md`
@@ -70,7 +70,8 @@ For each risk:
 - named remediation plan for every high / critical item,
 - documented rationale for any accepted residual risk,
 - linkage to vendor reviews, WISP sections, and privacy notice disclosures,
-- confirmation that the final deployment architecture still matches `docs/data-flow.md`.
+- confirmation that the final deployment architecture still matches `docs/data-flow.md`,
+- evidence of at least one exercised runbook or tabletop for each critical scenario.
 
 ## 6. Review cadence
 
@@ -79,3 +80,4 @@ Suggested review triggers:
 - after any material vendor / architecture change,
 - after any incident or near miss,
 - at least annually while the product remains active.
+- For the pilot phase, review the register after each evidence-gathering change.

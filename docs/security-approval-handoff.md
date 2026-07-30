@@ -11,6 +11,9 @@ Please review the attached security packet and reply with one of:
 - **approved with required controls / evidence**
 - **blocked**
 
+### Pilot scope
+Current California one-state pilot.
+
 ### Primary packet
 `docs/security-review-packet.md`
 
@@ -34,7 +37,7 @@ Please review the attached security packet and reply with one of:
 - Does the current data-flow correctly identify all assets / copies of customer information?
 - Is the WISP skeleton sufficient, and what sections are still mandatory before approval?
 - Which risks in the current template are launch blockers?
-- What encryption / IAM / MFA / KMS decisions and evidence are mandatory for the pilot?
+- What encryption / IAM / MFA / KMS decisions and evidence are mandatory for the California pilot?
 - What vendor / processor security requirements must be satisfied before launch?
 - What incident-response, logging, and monitoring evidence must exist before sign-off?
 

@@ -1,0 +1,27 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "golden-audit-pilot",
+  "compatibility_date": "2026-07-30",
+  "pages_build_output_dir": "apps/web/client/dist",
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1
+  },
+  "d1_databases": [
+    {
+      "binding": "PILOT_DB",
+      "database_name": "golden-audit-pilot",
+      "database_id": "REPLACE_WITH_D1_DATABASE_ID"
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "PILOT_UPLOADS",
+      "bucket_name": "REPLACE_WITH_R2_BUCKET_NAME"
+    }
+  ],
+  "vars": {
+    "PILOT_APPROVAL_RECORD_PATH": "docs/pilot-approval-records.json",
+    "PILOT_SCOPE": "california-one-state-pilot"
+  }
+}

@@ -1,6 +1,6 @@
 # Pilot approval review packet (draft)
 
-> **Status:** Working packet for accountable reviewers, not legal advice. This packet does not grant approval by itself; it bundles the current evidence and unresolved questions so counsel, privacy, security, operations, accessibility, product, and vendor owners can review the pilot coherently.
+> **Status:** Working packet for accountable reviewers, not legal advice. This packet does not grant approval by itself; it bundles the current evidence and unresolved questions so counsel, privacy, security, operations, accessibility, product, and vendor owners can review the current California one-state pilot coherently.
 
 ## Purpose
 
@@ -17,7 +17,7 @@ This packet exists to:
 1. point each reviewer at the relevant artifacts,
 2. make the remaining open questions explicit,
 3. provide stable evidence references that can be cited in `docs/pilot-approval-records.json`, and
-4. keep the review process stack-agnostic until implementation choices are actually made.
+4. keep the review process stack-agnostic until implementation choices are actually made for the California pilot.
 
 ## Packet contents
 
@@ -56,7 +56,7 @@ This packet exists to:
 ## 1. Legal review lane
 
 ### Reviewer goal
-Decide whether the **free invite-only pilot** stays inside the intended product boundary and whether the current drafts are safe enough to approve (or narrow) for that pilot.
+Decide whether the **free invite-only California pilot** stays inside the intended product boundary and whether the current drafts are safe enough to approve (or narrow) for that pilot.
 
 ### Read in this order
 1. `docs/adr/0003-conditional-free-pilot.md`
@@ -80,7 +80,7 @@ Decide whether the **free invite-only pilot** stays inside the intended product 
 ## 2. Privacy review lane
 
 ### Reviewer goal
-Decide whether the current collection / use / retention / rights disclosures are directionally correct and what additional notices or workflows are required before pilot use.
+Decide whether the current collection / use / retention / rights disclosures are directionally correct and what additional notices or workflows are required before California pilot use.
 
 ### Read in this order
 1. `docs/privacy-notice-draft.md`
@@ -101,7 +101,7 @@ Decide whether the current collection / use / retention / rights disclosures are
 ## 3. Security review lane
 
 ### Reviewer goal
-Decide whether the draft safeguards and seeded risk register are sufficient to guide implementation, and identify what infrastructure decisions or evidence are still required before real pilot use.
+Decide whether the draft safeguards and seeded risk register are sufficient to guide implementation, and identify what infrastructure decisions or evidence are still required before real California pilot use.
 
 ### Read in this order
 1. `docs/data-flow.md`
@@ -143,7 +143,7 @@ Decide which third parties are permitted to touch customer information and what 
 ## 5. Product review lane
 
 ### Reviewer goal
-Decide whether the product boundary, educational framing, and launch scope remain aligned with the pilot's legal and trust constraints.
+Decide whether the product boundary, educational framing, and launch scope remain aligned with the California pilot's legal and trust constraints.
 
 ### Read in this order
 1. `docs/pilot-readiness.md`
@@ -162,7 +162,7 @@ Decide whether the product boundary, educational framing, and launch scope remai
 ## 6. Operations review lane
 
 ### Reviewer goal
-Decide whether the runbooks, deletion expectations, and incident-handling preparation are sufficient for a controlled pilot.
+Decide whether the runbooks, deletion expectations, and incident-handling preparation are sufficient for a controlled California pilot.
 
 ### Read in this order
 1. `docs/pilot-readiness.md`
@@ -182,7 +182,7 @@ Decide whether the runbooks, deletion expectations, and incident-handling prepar
 ## 7. Accessibility review lane
 
 ### Reviewer goal
-Decide what accessibility evidence is still missing and whether a product surface exists to evaluate at all.
+Decide what accessibility evidence is still missing and whether a product surface exists to evaluate at all for the California pilot.
 
 ### Read in this order
 1. `docs/pilot-readiness.md`
@@ -232,3 +232,4 @@ This packet still cannot unblock:
 - launch itself.
 
 It is preparation for those approvals, not a substitute for them.
+

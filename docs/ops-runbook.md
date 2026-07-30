@@ -1,20 +1,25 @@
 # Observability, Secrets, Backups, and Runbooks
 
+> **Status:** Operational scaffolding for the current California one-state pilot. These notes support readiness evidence; they do not constitute production certification.
+
 ## Observability
 - Log every consumer mutation with a structured event.
 - Include request/session IDs on all web-boundary errors when practical.
 - Track analysis failures, upload failures, persistence failures, and rejected approvals as separate event classes.
 - Web runtime events are persisted in the runtime SQLite store.
+- For pilot evidence, record at least one example of each event class and where it is surfaced.
 
 ## Secrets
 - Keep future production secrets out of git.
 - Use environment variables or a secret manager for database credentials, signing keys, and provider tokens.
 - Never hardcode credentials in `apps/web`, `apps/worker`, or `apps/admin`.
+- For pilot evidence, document where secrets live and how access is restricted.
 
 ## Backups
 - Treat runtime storage as a backup target once it moves off local disk.
 - Define restore steps before any real pilot expansion.
 - Test restore paths on a schedule.
+- For pilot evidence, record the backup target, restore steps, and last restore test result.
 
 ## Runbooks
 ### Health failure
@@ -34,6 +39,10 @@
 2. Confirm the SQLite runtime file is present.
 3. Inspect recent `runtime_events` records.
 4. Restore from the latest backup if available.
+
+### Drill evidence
+- Record date, owner, result, gaps, and follow-up ticket for each exercised runbook.
+- Keep the exercise note linked to the corresponding approval lane.
 
 ## Release note
 These notes are operational scaffolding only. They do not constitute production certification.

@@ -1,10 +1,10 @@
 # Approval handoff template (draft)
 
-> **Status:** Working template for sending each review packet to an accountable owner. This is not an approval; it is the request that should produce one.
+> **Status:** Working template for sending each review packet to an accountable owner. This is not an approval; it is the request that should produce one for the current California one-state pilot.
 
 ## Use
 
-Fill one copy of this template per review lane (legal, privacy, security, vendor, product, operations, accessibility) and send it together with the relevant packet.
+Fill one copy of this template per review lane (legal, privacy, security, vendor, product, operations, accessibility) and send it together with the relevant packet for the California pilot.
 
 ---
 
@@ -12,6 +12,9 @@ Fill one copy of this template per review lane (legal, privacy, security, vendor
 
 ### Review lane
 `[legal | privacy | security | vendor | product | operations | accessibility]`
+
+### Pilot scope
+Current California one-state pilot.
 
 ### Decision requested
 Please review the attached packet and reply with one of:

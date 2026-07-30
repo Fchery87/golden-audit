@@ -1,15 +1,15 @@
 # Privacy review packet (draft)
 
-> **Status:** Working packet for privacy counsel / privacy owner review, not legal advice. This packet is intended to help answer whether the current pilot notice, retention, rights, and processor disclosures are adequate for the free invite-only pilot.
+> **Status:** Working packet for privacy counsel / privacy owner review, not legal advice. This packet is for the current California one-state pilot and is intended to answer whether the current pilot notice, retention, rights, and processor disclosures are adequate for the free invite-only pilot.
 
 ## Purpose
 
-The product is intentionally limited to a consumer-uploaded, consumer-only, educational flow. This packet collects the privacy-specific evidence needed to decide whether the draft notice and operational controls are acceptable as written, or what must change before launch.
+The product is intentionally limited to a consumer-uploaded, consumer-only, educational flow for the current California one-state pilot. This packet collects the privacy-specific evidence needed to decide whether the draft notice and operational controls are acceptable as written, or what must change before launch.
 
 ## What is already enforced in code or documented in the repo
 
 - Consumer-uploaded reports only (no self-fetching).
-- Consumer-only delivery.
+- Consumer-only delivery for the California pilot.
 - Written authorization before processing.
 - Disclosed retention policy and consumer deletion control.
 - No sale, no advertising, no unrelated model training on report data.
@@ -65,7 +65,7 @@ The product is intentionally limited to a consumer-uploaded, consumer-only, educ
 
 ## Evidence references for approval records
 
-Use one of these stable anchors if the privacy owner approves, requests edits, or blocks launch:
+Use one of these stable anchors if the privacy owner approves, requests edits, or blocks the California pilot:
 - `docs/privacy-review-packet.md#1-notice-at-collection--transparency`
 - `docs/privacy-review-packet.md#2-retention-and-deletion`
 - `docs/privacy-review-packet.md#3-rights-handling`
@@ -87,7 +87,7 @@ If edits are required, please specify:
 
 ## Open items the privacy review should resolve
 
-- whether the pilot notice needs a dedicated notice-at-collection format,
+- whether the pilot notice needs a dedicated notice-at-collection format for the California pilot,
 - whether the retention periods need to be more specific,
 - whether the processor categories should be narrowed or named,
 - whether rights language needs to be split by jurisdiction,
@@ -102,4 +102,4 @@ This packet does not:
 - approve production deployment,
 - replace counsel review.
 
-It exists to make the privacy review actionable and evidence-linked.
+It exists to make the privacy review actionable and evidence-linked for the California pilot.

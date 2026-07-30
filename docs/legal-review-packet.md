@@ -1,14 +1,14 @@
 # Legal review packet (draft)
 
-> **Status:** Working packet for retained California/FCRA counsel, not legal advice. This is the first lane in the human-gate review sequence because legal clearance is the primary blocker on the free invite-only pilot.
+> **Status:** Working packet for retained California/FCRA counsel, not legal advice. It is the first lane in the human-gate sequence for the current California one-state pilot, because legal clearance is the primary blocker on the free invite-only pilot.
 
 ## Purpose
 
-This packet bundles the current evidence counsel needs to answer one question:
+This packet bundles the current evidence counsel needs to answer one question for the current California one-state pilot:
 
 > **Can the free invite-only pilot proceed with the current consumer-only, educational, report-upload model — and if yes, under what required edits?**
 
-It is intentionally narrow: it does **not** try to finalize privacy, security, or vendor contracts. It points counsel to the exact artifacts and the exact open questions that remain.
+It is intentionally narrow: it does **not** try to finalize privacy, security, or vendor contracts. It points counsel to the exact artifacts and exact open questions that remain for the California pilot.
 
 ## What is already enforced in code
 
@@ -60,18 +60,21 @@ The current prototype already enforces these pilot boundaries:
 - Are the risk assessment and vendor oversight templates enough to support approvals?
 
 ### 5) Vendor / processor scope
-- Which processor categories are permitted for the pilot?
+- Which processor categories are permitted for the California free pilot?
+
 - What contractual clauses are mandatory (confidentiality, security, deletion, incident notification, subprocessors, data residency)?
 - Are any contemplated vendors or features incompatible with the free pilot boundary?
 
 ### 6) Scope / launch boundary
-- Is the current pilot correctly limited to a **free invite-only educational pilot**?
+- Is the current pilot correctly limited to a **free invite-only California educational pilot**?
+
 - What changes are required before any paid launch, if one is ever considered?
 - Is California Credit Services Act review required before the pilot or only before a paid model?
 
 ## Open legal conditions still tracked in ticket 12
 
-The following are still open and require accountable owner review/sign-off:
+The following are still open and require accountable owner review/sign-off before the California pilot can be treated as ready for human approval:
+
 
 - reports encrypted in transit and at rest,
 - every processor bound to confidentiality/security/deletion/incident duties,
@@ -99,7 +102,8 @@ If edits are required, counsel should state:
 
 ## Evidence references for approval records
 
-When counsel signs off (or requests changes), record the evidence reference using one of these stable anchors:
+If counsel signs off (or requests changes), record the evidence reference using one of these stable anchors:
+
 
 - `docs/legal-review-packet.md#1-cra--cro-boundary`
 - `docs/legal-review-packet.md#2-authorization-and-notice`
@@ -110,4 +114,5 @@ When counsel signs off (or requests changes), record the evidence reference usin
 
 ## Final note
 
-This packet is intentionally conservative. It is meant to help counsel decide whether the current free pilot boundary is acceptable **as written**, not to argue for a launch that the product cannot yet support.
+This packet is intentionally conservative. It is meant to help counsel decide whether the current California free pilot boundary is acceptable **as written**, not to argue for a launch that the product cannot yet support.
+

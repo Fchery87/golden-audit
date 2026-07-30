@@ -2,6 +2,11 @@ import { access, mkdir, writeFile } from 'node:fs/promises'
 
 const required = [
   'apps/web/src/server.ts',
+  'apps/web/functions/api/health.ts',
+  'apps/web/functions/api/onboarding.ts',
+  'apps/web/functions/api/_platform.ts',
+  'apps/web/functions/api/consumer/[[path]].ts',
+  'apps/web/src/pilot-state.ts',
   'apps/worker/src/server.ts',
   'apps/admin/src/server.ts',
   'packages/domain/src/index.ts',
@@ -9,6 +14,8 @@ const required = [
   'packages/platform/src/index.ts',
   'database/migrations/001_foundation.sql',
   'database/migrations/002_product_platform.sql',
+  'database/migrations/003_pilot_pages_state.sql',
+  'wrangler.jsonc',
 ]
 await Promise.all(required.map(path => access(path)))
 await mkdir('dist', { recursive: true })

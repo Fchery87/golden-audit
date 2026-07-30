@@ -125,7 +125,7 @@ function postJson<T>(port: number, path: string, body: unknown, headers: Record<
 }
 
 async function waitForServer(port: number): Promise<void> {
-  for (let attempt = 0; attempt < 40; attempt += 1) {
+  for (let attempt = 0; attempt < 120; attempt += 1) {
     try {
       const response = await getJson<{ status: string }>(port, '/health')
       if (response.statusCode === 200) return

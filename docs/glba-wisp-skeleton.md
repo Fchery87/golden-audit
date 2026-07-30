@@ -29,6 +29,7 @@ This Written Information Security Program (WISP) describes the administrative, t
 - **Responsible individual:** `[NAME / ROLE]`
 - **Backup owner:** `[NAME / ROLE]`
 - **Approval authority:** `[NAME / ROLE]`
+- **Evidence reference:** `[stable anchor in the security evidence tracker / approval packet]`
 
 Responsibilities include:
 - maintaining this program,
@@ -79,6 +80,7 @@ Reference template: `docs/risk-assessment-template.md`.
 - Access approval / revocation workflow documented
 - Joiner / mover / leaver process
 - Periodic access review cadence `[MONTHLY / QUARTERLY]`
+- Pilot evidence: include the owner of the privileged-access review and the review date.
 
 ### 6.2 MFA
 - MFA required for:
@@ -87,6 +89,7 @@ Reference template: `docs/risk-assessment-template.md`.
   - admin/support tools
   - code hosting and CI/CD
   - vendor dashboards processing customer information
+- Pilot evidence: list each protected system and how MFA is enforced.
 
 ### 6.3 Training
 - Security / privacy training cadence `[ANNUAL]`
@@ -105,6 +108,7 @@ Reference template: `docs/risk-assessment-template.md`.
 - Encryption **at rest** for report storage, databases, backups, and any processor storage holding customer information
 - Key management owner / system: `[KMS / HSM / provider-managed]`
 - Key rotation cadence: `[SCHEDULE]`
+- Pilot evidence: confirm the storage and backup layers that must be encrypted and the responsible owner.
 
 ### 7.2 Data minimization / retention
 - Originals retained only as long as operationally necessary, with a stated maximum
@@ -137,7 +141,8 @@ Every processor handling consumer information must be covered by:
 - incident-notification duties,
 - subprocessors disclosure / approval terms,
 - data residency review,
-- training / retention evidence where relevant.
+- training / retention evidence where relevant,
+- pilot approval evidence reference.
 
 Maintain a vendor inventory with:
 - vendor name,
@@ -162,6 +167,7 @@ A written incident response plan must exist and define:
 - post-incident review and corrective actions.
 
 At least one tabletop or drill should be recorded before pilot launch.
+- Pilot evidence: record the latest drill date, owner, and follow-up ticket.
 
 ## 10. Testing and adjustment
 
@@ -188,6 +194,7 @@ Fill these before treating the WISP as operational:
 - incident response owner and escalation path
 - vendor inventory and contract status
 - review / approval signatures
+- pilot evidence references
 
 ## 12. Companion artifacts
 

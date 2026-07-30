@@ -1,15 +1,15 @@
 # Security review packet (draft)
 
-> **Status:** Working packet for security owner / security reviewer, not legal advice. This packet is designed to help answer whether the current safeguards plan is sufficient for the free invite-only pilot and what implementation evidence must exist before any real consumer use.
+> **Status:** Working packet for security owner / security reviewer, not legal advice. This packet is for the current California one-state pilot and is designed to help answer whether the current safeguards plan is sufficient for the free invite-only pilot and what implementation evidence must exist before any real consumer use.
 
 ## Purpose
 
-The current product is still an in-memory prototype, but the pilot approval gate assumes real security controls will exist before launch. This packet gathers the security-specific evidence, draft safeguards, and open risks so the security owner can review them as a coherent whole.
+The current product is still an in-memory prototype, but the pilot approval gate assumes real security controls will exist before launch of the California pilot. This packet gathers the security-specific evidence, draft safeguards, and open risks so the security owner can review them as a coherent whole.
 
 ## What is already enforced in code or documented
 
 - Written authorization gate before processing
-- Consumer-only delivery model
+- Consumer-only delivery model for the California pilot
 - Upload validation / quarantine behavior
 - Inbound redaction before analysis
 - Reject-rather-than-guess parser behavior
@@ -73,7 +73,7 @@ The current product is still an in-memory prototype, but the pilot approval gate
 
 ## Evidence references for approval records
 
-Use one of these stable anchors if the security owner approves, requests changes, or blocks launch:
+Use one of these stable anchors if the security owner approves, requests changes, or blocks the California pilot:
 - `docs/security-review-packet.md#1-data-path-and-asset-inventory`
 - `docs/security-review-packet.md#2-wisp-completeness`
 - `docs/security-review-packet.md#3-risk-assessment-and-prioritization`
@@ -84,7 +84,7 @@ Use one of these stable anchors if the security owner approves, requests changes
 
 ## Open items this review should resolve
 
-The security review should explicitly resolve or narrow these ticket-12 / ticket-11 items:
+The security review should explicitly resolve or narrow these ticket-12 / ticket-11 items before the California pilot can be treated as ready for human approval:
 - reports encrypted in transit and at rest,
 - written information-security program with a designated responsible individual,
 - documented risk assessment,
@@ -115,4 +115,4 @@ This packet does not:
 - replace a final risk review,
 - approve production deployment on its own.
 
-It exists to make the security review explicit, evidence-linked, and actionable.
+It exists to make the security review explicit, evidence-linked, and actionable for the California pilot.
