@@ -3,10 +3,6 @@
      "name": "golden-audit-pilot",
      "compatibility_date": "2026-07-30",
      "pages_build_output_dir": "apps/web/client/dist",
-     "observability": {
-       "enabled": true,
-       "head_sampling_rate": 1
-     },
      "d1_databases": [
        {
          "binding": "PILOT_DB",
