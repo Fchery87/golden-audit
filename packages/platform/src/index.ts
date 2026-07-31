@@ -11,8 +11,8 @@ import { InMemoryStore, InMemoryBlobStore, randomInviteCode, type PlatformStore,
 import type {
   Id, Jurisdiction, Bureau, Consent, AuthorizationRecord, LaunchScope, User, Session, Workspace,
   UploadStage, Upload, CanonicalValue, Tradeline, CanonicalReport, GovernanceStatus, GovernanceHistory,
-  Authority, EducationModule, ReviewerRole, Reviewer, Rule, MatchGroup, Analysis, ActionItem,
-  ConsumerReport, ExportArtifact, DeletionJob, AuditEvent, PilotApprovalArea, PilotApproval, PilotGate,
+  Authority, EducationModule, EducationModuleKind, ReviewedGovernanceCatalog, ReviewerRole, Reviewer, Rule, MatchGroup, Analysis, ActionItem,
+  ReportFinding, CoverageRow, ParserFieldAvailability, ReportContent, ConsumerReport, ExportArtifact, DeletionJob, AuditEvent, PilotApprovalArea, PilotApproval, PilotGate,
   PilotDrillResult, PilotDrill, PilotDrillEvidenceGap, PilotDrillEvidenceReport, PilotEvidenceSummary,
   PilotApprovalRecordFile, QualityLatencySummary, QualityFindingSummary, QualityMatchingSummary,
   QualityParserSummary, QualityReportSegment, QualityReport,
@@ -21,8 +21,8 @@ import type {
 export type {
   Id, Jurisdiction, Bureau, Consent, AuthorizationRecord, LaunchScope, User, Session, Workspace,
   UploadStage, Upload, CanonicalValue, Tradeline, CanonicalReport, GovernanceStatus, GovernanceHistory,
-  Authority, EducationModule, ReviewerRole, Reviewer, Rule, MatchGroup, Analysis, ActionItem,
-  ConsumerReport, ExportArtifact, DeletionJob, AuditEvent, PilotApprovalArea, PilotApproval, PilotGate,
+  Authority, EducationModule, EducationModuleKind, ReviewedGovernanceCatalog, ReviewerRole, Reviewer, Rule, MatchGroup, Analysis, ActionItem,
+  ReportFinding, CoverageRow, ParserFieldAvailability, ReportContent, ConsumerReport, ExportArtifact, DeletionJob, AuditEvent, PilotApprovalArea, PilotApproval, PilotGate,
   PilotDrillResult, PilotDrill, PilotDrillEvidenceGap, PilotDrillEvidenceReport, PilotEvidenceSummary,
   PilotApprovalRecordFile, QualityLatencySummary, QualityFindingSummary, QualityMatchingSummary,
   QualityParserSummary, QualityReportSegment, QualityReport,
@@ -74,10 +74,15 @@ export class CreditAnalysisPlatform {
    *  either, so this is not a new cross-request durability gap introduced by the D5 rewrite. */
   private timelineBySubject = new Map<Id, { uploadCompletedAt?: string; reportParsedAt?: string; analysisCreatedAt?: string }>()
 
+  private catalog: ReviewedGovernanceCatalog | undefined
+
   constructor(
     private store: PlatformStore = new InMemoryStore(),
     private blobStore: BlobStore = new InMemoryBlobStore(),
-  ) {}
+    catalog?: ReviewedGovernanceCatalog,
+  ) {
+    if (catalog) this.installReviewedCatalog(catalog)
+  }
 
   // ------------------------------------------------------------------
   // Accounts / sessions / invites (D10)
@@ -371,13 +376,46 @@ export class CreditAnalysisPlatform {
   // Governance (operator config — stays in-memory, re-seeded per instantiation)
   // ------------------------------------------------------------------
 
+  installReviewedCatalog(catalog: ReviewedGovernanceCatalog): void {
+    if (this.catalog) return
+    const contentForDigest = { ...catalog, approval: undefined }
+    const catalogDigest = createHash('sha256').update(JSON.stringify(contentForDigest)).digest('hex')
+    if (catalog.approval.approvedByGitIdentity !== 'fchery87' || catalog.approval.catalogSha256 !== catalogDigest) throw new Error('Reviewed content approval does not match this catalog')
+    if (catalog.approval.reviewIntervalDays !== 90 || Date.parse(catalog.approval.reReviewDueAt) - Date.parse(catalog.approval.approvedAt) !== 90 * 24 * 60 * 60 * 1000) throw new Error('Reviewed content has an invalid re-review interval')
+    if (Date.parse(catalog.approval.reReviewDueAt) < Date.now()) throw new Error('Reviewed content is overdue for re-review')
+    const authorityIds = new Set(catalog.authorities.map(item => item.id))
+    const moduleIds = new Set(catalog.modules.map(item => item.id))
+    if (authorityIds.size !== catalog.authorities.length || moduleIds.size !== catalog.modules.length) throw new Error('Reviewed content has duplicate identifiers')
+    for (const authority of catalog.authorities) {
+      if (authority.status !== 'published' || !authority.title || !authority.sourceUrl || !/^https:\/\//.test(authority.sourceUrl)) throw new Error('Reviewed authority is incomplete')
+      assertSafeConsumerOutput(`${authority.title}\n${authority.citation}\n${authority.limitations.join('\n')}`)
+    }
+    for (const module of catalog.modules) {
+      if (module.status !== 'published' || !module.authorityIds?.length || !module.authorityIds.every(id => authorityIds.has(id))) throw new Error('Reviewed module has an unknown authority')
+      assertSafeConsumerOutput(`${module.title}\n${module.body}\n${module.limitations.join('\n')}`)
+    }
+    for (const rule of catalog.rules) {
+      if (rule.status !== 'published' || !rule.requiredInputs.length || !rule.testCases.length || !rule.authorityIds.every(id => authorityIds.has(id)) || !rule.educationModuleIds.every(id => moduleIds.has(id))) throw new Error('Reviewed rule contract is incomplete')
+      assertSafeConsumerOutput(`${rule.name}\n${rule.requiredInputs.join('\n')}\n${rule.limitations.join('\n')}`)
+    }
+    const version = createHash('sha256').update(JSON.stringify(catalog.rules)).digest('hex').slice(0, 12)
+    const rules = catalog.rules.map(rule => ({ ...structuredClone(rule), version }))
+    this.catalog = structuredClone(catalog)
+    for (const authority of catalog.authorities) { this.authorities.set(authority.id, structuredClone(authority)); this.publishedAuthorities.set(authority.id, structuredClone(authority)) }
+    for (const module of catalog.modules) { this.modules.set(module.id, structuredClone(module)); this.publishedModules.set(module.id, structuredClone(module)) }
+    for (const rule of rules) this.rules.set(rule.id, structuredClone(rule))
+    this.publishedRulesets.set(version, rules)
+  }
+
+  getReviewedCatalogVersion(): string | undefined { return this.catalog?.catalogVersion }
+
   registerReviewer(input: Reviewer): void { this.reviewers.set(input.id, structuredClone(input)) }
   private requireReviewer(reviewerId: Id, roles: ReviewerRole[]): Reviewer { const reviewer = this.reviewers.get(reviewerId); if (!reviewer || !roles.includes(reviewer.role)) throw new Error('Reviewer is not authorized'); return reviewer }
-  createAuthority(reviewerId: Id, input: Omit<Authority, 'id' | 'status' | 'history'>): Authority { this.requireReviewer(reviewerId, ['compliance-reviewer']); const item = { ...input, id: randomUUID(), status: 'draft' as const, history: [] }; this.authorities.set(item.id, item); return structuredClone(item) }
-  createEducationModule(reviewerId: Id, input: Omit<EducationModule, 'id' | 'status' | 'history'>): EducationModule { this.requireReviewer(reviewerId, ['compliance-reviewer']); const item = { ...input, id: randomUUID(), status: 'draft' as const, history: [] }; this.modules.set(item.id, item); return structuredClone(item) }
+  createAuthority(reviewerId: Id, input: Omit<Authority, 'id' | 'status' | 'history'>): Authority { this.requireReviewer(reviewerId, ['compliance-reviewer']); const item = { ...input, title: input.title ?? 'Documentation basis', sourceUrl: input.sourceUrl ?? 'https://www.consumerfinance.gov/', id: randomUUID(), status: 'draft' as const, history: [] }; this.authorities.set(item.id, item); return structuredClone(item) }
+  createEducationModule(reviewerId: Id, input: Omit<EducationModule, 'id' | 'status' | 'history'>): EducationModule { this.requireReviewer(reviewerId, ['compliance-reviewer']); const item = { ...input, kind: input.kind ?? 'finding-module' as const, section: input.section ?? 'finding' as const, authorityIds: input.authorityIds ?? [], id: randomUUID(), status: 'draft' as const, history: [] }; this.modules.set(item.id, item); return structuredClone(item) }
   createRule(reviewerId: Id, input: Omit<Rule, 'id' | 'status' | 'history'>): Rule { this.requireReviewer(reviewerId, ['engineering-reviewer']); if (!input.requiredInputs.length || !input.testCases.length) throw new Error('Rule contract is incomplete'); const item = { ...input, id: randomUUID(), status: 'draft' as const, history: [] }; this.rules.set(item.id, item); return structuredClone(item) }
   reviewGovernance(kind: 'authority' | 'module' | 'rule', id: Id, reviewerId: Id, action: Exclude<GovernanceStatus, 'draft'> | 'revision-requested', reason: string): void { this.requireReviewer(reviewerId, ['compliance-reviewer', 'engineering-reviewer']); const map = kind === 'authority' ? this.authorities : kind === 'module' ? this.modules : this.rules; const item = map.get(id); if (!item) throw new Error('Governance item not found'); item.history.push({ action, reviewerId, at: now(), reason }); if (action !== 'revision-requested') item.status = action; void this.audit(`governance-${action}`, reviewerId, id, { kind, reason }) }
-  publishRuleset(reviewerId: Id, jurisdiction: Jurisdiction, effectiveDate: string): string { this.requireReviewer(reviewerId, ['release-manager']); const rules = [...this.rules.values()].filter(rule => rule.status === 'approved' && rule.jurisdiction === jurisdiction && rule.effectiveFrom <= effectiveDate && rule.authorityIds.every(id => this.authorities.get(id)?.status === 'approved') && rule.educationModuleIds.every(id => this.modules.get(id)?.status === 'approved')); if (!rules.length) throw new Error('No approved rules available'); const version = createHash('sha256').update(JSON.stringify(rules)).digest('hex').slice(0, 12); const published = structuredClone(rules).map(rule => ({ ...rule, status: 'published' as const, version })); this.publishedRulesets.set(version, published); for (const rule of rules) rule.status = 'published'; for (const rule of rules) for (const id of rule.authorityIds) { const authority = this.authorities.get(id); if (authority) { authority.status = 'published'; this.publishedAuthorities.set(id, structuredClone(authority)) } } for (const rule of rules) for (const id of rule.educationModuleIds) { const module = this.modules.get(id); if (module) { module.status = 'published'; this.publishedModules.set(id, structuredClone(module)) } } void this.audit('ruleset-published', reviewerId, version, { jurisdiction }); return version }
+  publishRuleset(reviewerId: Id, jurisdiction: Jurisdiction, effectiveDate: string): string { this.requireReviewer(reviewerId, ['release-manager']); const rules = [...this.rules.values()].filter(rule => rule.status === 'approved' && rule.jurisdiction === jurisdiction && rule.effectiveFrom <= effectiveDate && rule.authorityIds.every(id => this.authorities.get(id)?.status === 'approved') && rule.educationModuleIds.every(id => this.modules.get(id)?.status === 'approved')); if (!rules.length) throw new Error('No approved rules available'); for (const rule of rules) { const authorities = rule.authorityIds.map(id => this.authorities.get(id)); const modules = rule.educationModuleIds.map(id => this.modules.get(id)); if (authorities.some(authority => !authority?.title || !authority.sourceUrl || !/^https:\/\//.test(authority.sourceUrl)) || modules.some(module => !module)) throw new Error('Published consumer content is incomplete'); assertSafeConsumerOutput(`${rule.name}\n${rule.requiredInputs.join('\n')}\n${rule.limitations.join('\n')}\n${authorities.flatMap(authority => authority ? [authority.title ?? '', authority.citation] : []).join('\n')}\n${modules.flatMap(module => module ? [module.title, module.body, ...module.limitations] : []).join('\n')}`) } const version = createHash('sha256').update(JSON.stringify(rules)).digest('hex').slice(0, 12); const published = structuredClone(rules).map(rule => ({ ...rule, status: 'published' as const, version })); this.publishedRulesets.set(version, published); for (const rule of rules) rule.status = 'published'; for (const rule of rules) for (const id of rule.authorityIds) { const authority = this.authorities.get(id); if (authority) { authority.status = 'published'; this.publishedAuthorities.set(id, structuredClone(authority)) } } for (const rule of rules) for (const id of rule.educationModuleIds) { const module = this.modules.get(id); if (module) { module.status = 'published'; this.publishedModules.set(id, structuredClone(module)) } } void this.audit('ruleset-published', reviewerId, version, { jurisdiction }); return version }
   disableGovernance(kind: 'authority' | 'module' | 'rule', id: Id, reviewerId: Id, reason: string): void { this.requireReviewer(reviewerId, ['compliance-reviewer', 'release-manager']); this.reviewGovernance(kind, id, reviewerId, 'disabled', reason) }
   getEffectiveRules(jurisdiction: Jurisdiction, effectiveDate: string): Rule[] { return [...this.publishedRulesets.values()].flat().filter(rule => rule.jurisdiction === jurisdiction && rule.effectiveFrom <= effectiveDate && rule.status === 'published' && rule.authorityIds.every(id => this.authorities.get(id)?.status !== 'disabled') && rule.educationModuleIds.every(id => this.modules.get(id)?.status !== 'disabled')).map(rule => structuredClone(rule)) }
   getEffectiveAuthorities(jurisdiction: Jurisdiction, effectiveDate: string): Authority[] { return [...this.publishedAuthorities.values()].filter(item => item.jurisdiction === jurisdiction && item.effectiveFrom <= effectiveDate && this.authorities.get(item.id)?.status !== 'disabled').map(item => structuredClone(item)) }
@@ -488,12 +526,52 @@ export class CreditAnalysisPlatform {
     const userId = await this.requireSession(sessionId)
     const analysis = await this.store.getAnalysis(analysisId); if (!analysis || analysis.userId !== userId) throw new Error('Not found')
     const report = await this.store.getReport(analysis.reportId); if (!report) throw new Error('Not found')
+    const authorityById = new Map([...this.publishedAuthorities.values()].map(item => [item.id, item]))
+    const moduleById = new Map([...this.publishedModules.values()].map(item => [item.id, item]))
+    const findings: ReportFinding[] = [...analysis.findings]
+      .sort((a, b) => SEVERITY_RANK[b.severity] - SEVERITY_RANK[a.severity] || b.confidence - a.confidence)
+      .map(finding => {
+        const authorities = finding.authorityIds.map(id => authorityById.get(id)).filter((item): item is Authority => item !== undefined)
+        const educationModules = finding.educationModuleIds.map(id => moduleById.get(id)).filter((item): item is EducationModule => item !== undefined)
+        if (authorities.length !== finding.authorityIds.length || educationModules.length !== finding.educationModuleIds.length) throw new Error('Published finding content cannot be resolved')
+        return { ...finding, authorities, educationModules }
+      })
+    const ruleset = this.publishedRulesets.get(analysis.versions.ruleset)
+    if (!ruleset) throw new Error('Published report rules are unavailable')
+    const catalogVersion = this.catalog?.catalogVersion ?? 'legacy-runtime-governance'
+    const sectionPrimers = this.catalog ? [...this.publishedModules.values()]
+      .filter((module): module is EducationModule & { kind: 'section-primer'; authorityIds: Id[] } => module.kind === 'section-primer' && module.jurisdiction === analysis.versions.jurisdiction && module.effectiveFrom <= report.reportDate && !!module.authorityIds)
+      .map(module => {
+        const authorities = module.authorityIds.map(id => authorityById.get(id)).filter((item): item is Authority => item !== undefined)
+        if (authorities.length !== module.authorityIds.length) throw new Error('Published primer authority cannot be resolved')
+        return { ...module, authorities }
+      }) : []
+    const coverage: CoverageRow[] = ruleset.map(rule => ({ ruleId: rule.id, name: rule.name, requiredInputs: [...rule.requiredInputs], outcomes: analysis.audit.filter(audit => audit.ruleId === rule.id) }))
+    const fieldNames = ['accountType', 'balance', 'creditLimit', 'pastDue', 'status', 'opened', 'updated'] as const
+    const parserFields: ParserFieldAvailability[] = fieldNames.map(field => ({
+      field,
+      capability: 'supported',
+      states: report.tradelines.reduce<ParserFieldAvailability['states']>((states, line) => {
+        const value = line[field]
+        states[value.state] += 1
+        return states
+      }, { known: 0, unknown: 0, blank: 0, 'not-applicable': 0, 'parser-failed': 0 }),
+    }))
+    for (const field of ['date of first delinquency', 'payment history', 'remarks', 'special comment codes']) parserFields.push({ field, capability: 'planned', states: { known: 0, unknown: 0, blank: 0, 'not-applicable': 0, 'parser-failed': 0 } })
     const consumerReport: ConsumerReport = {
       id: randomUUID(), userId, analysisId,
-      limitations: ['Educational information only', 'No legal verdict, deletion promise, or score prediction'],
+      limitations: ['Educational information only', 'No legal verdict; no deletion promise or score prediction'],
       overview: { tradelines: report.tradelines.length, collections: report.collections.length, inquiries: report.inquiries.length, openAccounts: report.tradelines.filter(line => line.status.normalized?.toLowerCase().includes('open')).length },
-      findings: [...analysis.findings].sort((a, b) => SEVERITY_RANK[b.severity] - SEVERITY_RANK[a.severity] || b.confidence - a.confidence),
+      findings,
       actions: analysis.findings.map(finding => ({ id: randomUUID(), findingId: finding.id, status: 'unresolved', documents: [] })),
+      content: {
+        catalogVersion,
+        rulesetVersion: analysis.versions.ruleset,
+        parserVersion: report.parserVersion,
+        sectionPrimers,
+        coverage,
+        parserFields,
+      },
       generatedAt: now(),
     }
     await this.store.saveConsumerReport(consumerReport)
@@ -522,8 +600,8 @@ export class CreditAnalysisPlatform {
     const analysis = await this.store.getAnalysis(report.analysisId)
     const content = JSON.stringify({
       generatedAt: now(), scope: 'Validated personal credit analysis', rulesetVersion: analysis?.versions.ruleset,
-      limitations: report.limitations, disclaimer: 'Educational information only; no specific outcome is promised.',
-      findings: report.findings.map(finding => ({ ...finding, evidence: finding.evidence.map(evidence => ({ ...evidence, value: typeof evidence.value === 'string' && /\d{5,}/.test(evidence.value) ? maskAccount(evidence.value) : evidence.value })) })),
+      limitations: report.limitations.map(limitation => limitation.replace(/No legal verdict/gi, 'No individual legal conclusion')).map(limitation => limitation.replace(/legal violation/gi, 'legal conclusion')), disclaimer: 'Educational information only; no specific outcome is promised.',
+      findings: report.findings.map(({ authorities: _authorities, educationModules: _educationModules, ...finding }) => ({ ...finding, evidence: finding.evidence.map(evidence => ({ ...evidence, value: typeof evidence.value === 'string' && /\d{5,}/.test(evidence.value) ? maskAccount(evidence.value) : evidence.value })) })),
     }, null, 2)
     assertSafeConsumerOutput(content)
     const artifact: ExportArtifact = { id: randomUUID(), userId, reportId: consumerReportId, content, createdAt: now() }

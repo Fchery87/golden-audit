@@ -75,7 +75,25 @@ export type ConsumerReport = {
   id: string
   analysisId: string
   limitations: string[]
-  findings: AnalysisFinding[]
+  overview: Record<string, number>
+  findings: Array<Omit<AnalysisFinding, 'limitations'> & {
+    limitations: string[]
+    classification: string
+    evidence: Array<{ field: string; value: string | number | null; source: { page?: number; locator?: string; originalDisplay?: string } }>
+    alternativeExplanations: string[]
+    suggestedAction: string
+    verificationDocuments: string[]
+    educationModules: Array<{ id: string; title: string; body: string; limitations: string[] }>
+    authorities: Array<{ id: string; title: string; sourceUrl: string; citation: string }>
+  }>
+  content?: {
+    catalogVersion: string
+    rulesetVersion: string
+    parserVersion: string
+    sectionPrimers: Array<{ id: string; title: string; body: string; limitations: string[]; authorityIds: string[]; authorities: Array<{ id: string; title: string; sourceUrl: string; citation: string }> }>
+    coverage: Array<{ ruleId: string; name: string; requiredInputs: string[]; outcomes: Array<{ outcome: string; reason: string }> }>
+    parserFields: Array<{ field: string; capability: 'supported' | 'planned'; states: Record<string, number> }>
+  }
 }
 
 export type ExportArtifact = { id: string; reportId: string; content: string }

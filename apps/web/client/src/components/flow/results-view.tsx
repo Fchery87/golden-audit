@@ -74,30 +74,74 @@ function Reading({ consumerReportId, exportId }: { consumerReportId: string; exp
         <>
           <h3 className="mt-6 font-serif text-3xl tracking-tight">
             {report.findings.length === 0
-              ? 'No disagreements surfaced.'
-              : `${report.findings.length} ${report.findings.length === 1 ? 'finding' : 'findings'} across your bureaus.`}
+              ? 'No report differences surfaced in the checks that ran.'
+              : `${report.findings.length} ${report.findings.length === 1 ? 'finding' : 'findings'} to review.`}
           </h3>
+          <p className="mt-3 max-w-2xl text-sm leading-relaxed text-muted-foreground">
+            This educational reading shows what this parser could read and which deterministic checks ran. A lack of findings does not mean every possible field or check was available.
+          </p>
 
-          <ul className="mt-8 space-y-5">
+          {report.content ? <>
+          <section className="mt-10" aria-labelledby="primers-heading">
+            <p className="eyebrow" id="primers-heading">Report walkthrough</p>
+            <div className="mt-4 grid gap-4 md:grid-cols-2">
+              {report.content.sectionPrimers.map((module) => (
+                <article key={module.id} className="border border-rule bg-paper p-5">
+                  <h4 className="font-serif text-xl">{module.title}</h4>
+                  <p className="mt-2 text-sm leading-relaxed text-muted-foreground">{module.body}</p>
+                  <ul className="mt-3 text-xs text-faint">{module.limitations.map((limitation) => <li key={limitation}>— {limitation}</li>)}</ul>
+                  <p className="mt-4 eyebrow">Documentation Basis</p>
+                  <ul className="mt-2 space-y-1 text-sm">{module.authorities.map((authority) => <li key={authority.id}><a className="underline decoration-rule underline-offset-4 hover:decoration-foreground" href={authority.sourceUrl} target="_blank" rel="noreferrer">{authority.title}</a></li>)}</ul>
+                </article>
+              ))}
+            </div>
+          </section>
+
+          {report.findings.length > 0 && <ul className="mt-10 space-y-6">
             {report.findings.map((f) => (
-              <li key={f.id} className="border-l-2 border-primary pl-5">
+              <li key={f.id} className="border border-rule bg-paper p-6">
                 <div className="flex flex-wrap items-center gap-3">
                   <Badge variant={severityVariant(f.severity)}>{f.severity}</Badge>
-                  <span className="font-mono text-xs text-faint">confidence {Math.round(f.confidence * 100)}%</span>
+                  <span className="font-mono text-xs text-faint">{f.classification.replaceAll('-', ' ')} · confidence {Math.round(f.confidence * 100)}%</span>
                 </div>
-                <p className="mt-2 font-serif text-xl leading-snug">{f.title}</p>
+                <h4 className="mt-3 font-serif text-2xl leading-snug">{f.title}</h4>
+                <dl className="mt-5 grid gap-3 text-sm sm:grid-cols-2">
+                  {f.evidence.map((item, index) => <div key={`${item.field}-${index}`}><dt className="font-mono text-xs uppercase text-faint">{item.field}</dt><dd className="mt-1">{String(item.value ?? 'Not shown')} {item.source.page ? <span className="text-muted-foreground">(page {item.source.page})</span> : null}</dd></div>)}
+                </dl>
+                <ReportList label="Other explanations to consider" items={f.alternativeExplanations} />
+                <p className="mt-5 text-sm leading-relaxed"><span className="font-medium">Suggested next step: </span>{f.suggestedAction}</p>
+                <ReportList label="Documents that may help you verify" items={f.verificationDocuments} />
+                <section className="mt-5 border-t border-rule pt-4" aria-label="Education">
+                  {f.educationModules.map((module) => <div key={module.id} className="mt-3"><h5 className="font-medium">{module.title}</h5><p className="mt-1 text-sm leading-relaxed text-muted-foreground">{module.body}</p></div>)}
+                </section>
+                <ReportList label="Limitations" items={f.limitations} />
+                <section className="mt-5" aria-label="Documentation Basis">
+                  <p className="eyebrow">Documentation Basis</p>
+                  <ul className="mt-2 space-y-1 text-sm">{f.authorities.map((authority) => <li key={authority.id}><a className="underline decoration-rule underline-offset-4 hover:decoration-foreground" href={authority.sourceUrl} target="_blank" rel="noreferrer">{authority.title}</a><span className="text-muted-foreground"> — {authority.citation}</span></li>)}</ul>
+                </section>
               </li>
             ))}
-          </ul>
+          </ul>}
+
+          <section className="mt-10" aria-labelledby="coverage-heading">
+            <p className="eyebrow" id="coverage-heading">Checks and coverage</p>
+            <div className="mt-3 overflow-x-auto border border-rule"><table className="w-full min-w-[42rem] text-left text-sm"><thead className="border-b border-rule text-xs uppercase text-faint"><tr><th className="p-3">Check</th><th className="p-3">Required fields</th><th className="p-3">Outcome</th></tr></thead><tbody>{report.content.coverage.map((row) => <tr className="border-b border-rule last:border-0" key={row.ruleId}><th className="p-3 font-medium">{row.name.replaceAll('-', ' ')}</th><td className="p-3 text-muted-foreground">{row.requiredInputs.join(', ')}</td><td className="p-3">{row.outcomes.length === 0 ? 'No confirmed matches were available for this check.' : row.outcomes.map((outcome, index) => <p key={`${outcome.outcome}-${index}`}><span className="font-medium">{outcome.outcome}</span> — {outcome.reason}</p>)}</td></tr>)}</tbody></table></div>
+          </section>
+
+          <section className="mt-10" aria-labelledby="parser-heading">
+            <p className="eyebrow" id="parser-heading">What this parser could read</p>
+            <div className="mt-3 overflow-x-auto border border-rule"><table className="w-full min-w-[42rem] text-left text-sm"><thead className="border-b border-rule text-xs uppercase text-faint"><tr><th className="p-3">Field</th><th className="p-3">Availability</th><th className="p-3">Values shown</th></tr></thead><tbody>{report.content.parserFields.map((field) => <tr className="border-b border-rule last:border-0" key={field.field}><th className="p-3 font-medium capitalize">{field.field}</th><td className="p-3">{field.capability === 'supported' ? 'Supported by this parser' : 'Not yet supported by this parser'}</td><td className="p-3 text-muted-foreground">{field.capability === 'supported' ? `${field.states.known ?? 0} read; ${field.states.unknown ?? 0} unavailable; ${field.states['parser-failed'] ?? 0} parser failures` : 'Planned for a later parser slice'}</td></tr>)}</tbody></table></div>
+          </section>
 
           <div className="mt-10">
-            <p className="eyebrow">Limitations</p>
+            <p className="eyebrow">Report limitations</p>
             <ul className="mt-3 space-y-1.5 text-base text-muted-foreground">
               {report.limitations.map((l) => (
                 <li key={l}>— {l}</li>
               ))}
             </ul>
           </div>
+          </> : <section className="mt-8"><p className="text-sm leading-relaxed text-muted-foreground">This earlier report predates the current content and coverage detail. Its findings and report limitations remain available below.</p><ul className="mt-6 space-y-5">{report.findings.map((finding) => <li key={finding.id} className="border-l-2 border-primary pl-5"><Badge variant={severityVariant(finding.severity)}>{finding.severity}</Badge><p className="mt-2 font-serif text-xl leading-snug">{finding.title}</p></li>)}</ul><ReportList label="Report limitations" items={report.limitations} /></section>}
 
           <div className="mt-10">
             <Button variant="outline" onClick={() => setShowExport((v) => !v)}>
@@ -113,6 +157,11 @@ function Reading({ consumerReportId, exportId }: { consumerReportId: string; exp
       )}
     </section>
   )
+}
+
+function ReportList({ label, items }: { label: string; items: string[] }) {
+  if (items.length === 0) return null
+  return <section className="mt-5"><p className="eyebrow">{label}</p><ul className="mt-2 space-y-1 text-sm text-muted-foreground">{items.map((item) => <li key={item}>— {item}</li>)}</ul></section>
 }
 
 function CollisionReview({ kickoff }: { kickoff: KickoffResult }) {

@@ -109,10 +109,19 @@ export type CanonicalReport = {
 
 export type GovernanceStatus = 'draft' | 'approved' | 'rejected' | 'published' | 'disabled'
 export type GovernanceHistory = { action: GovernanceStatus | 'revision-requested'; reviewerId: Id; at: string; reason: string }
-export type Authority = { id: Id; citation: string; jurisdiction: Jurisdiction; effectiveFrom: string; permittedUse: string; limitations: string[]; status: GovernanceStatus; history: GovernanceHistory[] }
-export type EducationModule = { id: Id; title: string; body: string; jurisdiction: Jurisdiction; effectiveFrom: string; permittedUse: string; limitations: string[]; status: GovernanceStatus; history: GovernanceHistory[] }
+export type Authority = { id: Id; title?: string; citation: string; sourceUrl?: string; jurisdiction: Jurisdiction; effectiveFrom: string; permittedUse: string; limitations: string[]; status: GovernanceStatus; history: GovernanceHistory[] }
+export type EducationModuleKind = 'section-primer' | 'finding-module'
+export type EducationModule = { id: Id; kind?: EducationModuleKind; section?: 'tradelines' | 'balances' | 'status' | 'inquiries' | 'finding'; title: string; body: string; authorityIds?: Id[]; jurisdiction: Jurisdiction; effectiveFrom: string; permittedUse: string; limitations: string[]; status: GovernanceStatus; history: GovernanceHistory[] }
 export type ReviewerRole = 'compliance-reviewer' | 'engineering-reviewer' | 'release-manager'
 export type Reviewer = { id: Id; role: ReviewerRole }
+export type ReviewedGovernanceCatalog = {
+  catalogVersion: string
+  jurisdiction: Jurisdiction
+  approval: { approvedByGitIdentity: string; approvedByEmail: string; approvedAt: string; reReviewDueAt: string; reviewIntervalDays: number; catalogSha256: string; reviewedCommit: string }
+  authorities: Authority[]
+  modules: EducationModule[]
+  rules: Array<Rule & { id: Id }>
+}
 export type Rule = {
   id: Id
   name: string
@@ -144,7 +153,12 @@ export type MatchGroup = {
 export type Analysis = CoreAnalysis & { userId: Id; reportId: Id }
 
 export type ActionItem = { id: Id; findingId: Id; status: 'unresolved' | 'recognized' | 'dismissed' | 'under-review' | 'complete'; note?: string; reason?: string; documents: string[] }
-export type ConsumerReport = { id: Id; userId: Id; analysisId: Id; limitations: string[]; overview: Record<string, number>; findings: Finding[]; actions: ActionItem[]; generatedAt: string }
+export type ReportFinding = Finding & { educationModules: EducationModule[]; authorities: Authority[] }
+export type ReportPrimer = EducationModule & { authorities: Authority[] }
+export type CoverageRow = { ruleId: Id; name: string; requiredInputs: string[]; outcomes: RuleAudit[] }
+export type ParserFieldAvailability = { field: string; capability: 'supported' | 'planned'; states: Record<CanonicalValue<unknown>['state'], number> }
+export type ReportContent = { catalogVersion: string; rulesetVersion: string; parserVersion: string; sectionPrimers: ReportPrimer[]; coverage: CoverageRow[]; parserFields: ParserFieldAvailability[] }
+export type ConsumerReport = { id: Id; userId: Id; analysisId: Id; limitations: string[]; overview: Record<string, number>; findings: ReportFinding[]; actions: ActionItem[]; content?: ReportContent; generatedAt: string }
 export type ExportArtifact = { id: Id; userId: Id; reportId: Id; content: string; createdAt: string }
 export type DeletionJob = { id: Id; userId: Id; status: 'pending-provider' | 'complete'; deleted: string[]; delayed: string[]; completedAt?: string }
 export type AuditEvent = { type: string; actorId: Id; subjectId: Id; at: string; metadata: Record<string, string> }
