@@ -306,10 +306,13 @@ The highest-uncertainty item gated the most work, so it went first.
 - D2: each stored `ConsumerReport` snapshots the complete Finding schema with resolved education and authority references, Tier-1 primers, versions, lossless `RuleAudit` coverage rows, and parser capability plus actual-field-state disclosure. The current reading surface renders these sections, including a calibrated zero-findings state; legacy reports retain their prior compact reading.
 - Validation gate: `npm run verify:content`, typecheck, the complete 89-test suite, the server build, and the client production build pass.
 
-### Phase 4 — Surface
+### Phase 4 — Surface — ✅ complete (2026-08-01)
 
-- D6: consumer flow; authorization and retention text rendered in full; file upload; sign-in, account, deletion; wizard to `/debug`.
-- D9: print stylesheet; JSON export expanded to mirror the report.
+- D6: the normal browser route is now a linear, server-resumable consumer flow: sign-in/registration tabs, California eligibility attestation, full server-sourced written authorization and retention policy, one PDF-only upload action, saved match review, report navigation, sign-out, and confirmed account deletion. The former per-step fixture wizard survives only at `/debug`.
+- The browser uses the Pages-compatible `/api` contract in local Vite and deployed Pages. Disclosures and dashboard state are server-owned; authorization requires the current version plus an affirmative acknowledgement at the HTTP boundary.
+- Account deletion clears the session cookie, deletes account-linked data and upload blobs, and keeps only a non-identifying completion receipt. Blob removal happens before deleting its metadata, so a failed removal leaves resumable account metadata rather than a false completion receipt.
+- D9: the web report has one document component for screen and print. Browser Print / Save as PDF retains the readings, authority links, findings, coverage, parser disclosure, and limitations. Download my data retrieves a versioned, guarded, identifier-masked JSON projection of the complete report snapshot.
+- Operations: the Cloudflare rollout procedure now applies migration 004 before the Pages consumer surface is deployed.
 
 ### Phase 5 — Full depth
 
