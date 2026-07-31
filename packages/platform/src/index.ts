@@ -507,6 +507,7 @@ export class CreditAnalysisPlatform {
     const unresolvedMatches = matches.filter(match => match.state === 'proposed')
     if (unresolvedMatches.length) throw new Error('Account matching confirmation is incomplete')
     const rules = this.publishedRulesets.get(rulesetVersion); if (!rules) throw new Error('Ruleset not found')
+    if (rules.some(rule => rule.status === 'disabled' || rule.authorityIds.some(id => this.authorities.get(id)?.status === 'disabled') || rule.educationModuleIds.some(id => this.modules.get(id)?.status === 'disabled'))) throw new Error('Ruleset contains disabled content')
     const core = evaluateAnalysis({ rules, tradelines: report.tradelines, confirmedMatches: matches.filter(match => match.state === 'confirmed').map(match => ({ tradelineIds: match.tradelineIds })), versions: { normalizedInput: report.normalizedVersion, ruleset: rulesetVersion, jurisdiction, parser: report.parserVersion, application: applicationVersion } })
     const parsedAt = this.timelineBySubject.get(report.id)?.reportParsedAt
     const analysis: Analysis = { ...core, userId, reportId }
@@ -526,6 +527,8 @@ export class CreditAnalysisPlatform {
     const userId = await this.requireSession(sessionId)
     const analysis = await this.store.getAnalysis(analysisId); if (!analysis || analysis.userId !== userId) throw new Error('Not found')
     const report = await this.store.getReport(analysis.reportId); if (!report) throw new Error('Not found')
+    const activeRules = this.publishedRulesets.get(analysis.versions.ruleset)
+    if (!activeRules || activeRules.some(rule => rule.status === 'disabled' || rule.authorityIds.some(id => this.authorities.get(id)?.status === 'disabled') || rule.educationModuleIds.some(id => this.modules.get(id)?.status === 'disabled'))) throw new Error('Report content is disabled')
     const authorityById = new Map([...this.publishedAuthorities.values()].map(item => [item.id, item]))
     const moduleById = new Map([...this.publishedModules.values()].map(item => [item.id, item]))
     const findings: ReportFinding[] = [...analysis.findings]
