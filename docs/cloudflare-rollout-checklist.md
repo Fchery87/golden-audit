@@ -212,6 +212,8 @@ Success criteria:
 - no placeholder values remain
 
 ## Step 6 — run local Pages Functions dev
+Cloudflare Pages in this repo should discover functions from the top-level `functions/` directory, which re-exports the implementation under `apps/web/functions/`.
+
 Run:
 ```bash
 npx wrangler pages dev apps/web/client/dist

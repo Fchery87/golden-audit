@@ -148,6 +148,8 @@ Example:
 ```
 
 ## 5) Run Pages Functions locally
+Cloudflare Pages in this repo should discover functions from the top-level `functions/` directory, which re-exports the implementation under `apps/web/functions/`.
+
 Cloudflare Pages docs support local dev via Wrangler.
 
 ```bash

@@ -10,7 +10,7 @@
     "dev:all": "node scripts/dev-all.mjs",
     "build": "tsc --noEmit && node scripts/build-check.mjs",
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test", 
+    "test": "tsx --test",
     "db:migrate": "tsx scripts/migrate.ts",
     "health": "tsx scripts/smoke.ts",
     "verify:pilot": "npm run typecheck && npm test && npm run db:migrate && npm run health",
