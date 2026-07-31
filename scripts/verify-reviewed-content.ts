@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { execFileSync } from 'node:child_process'
 import { assertSafeConsumerOutput } from '../packages/output-guard/src/index.js'
 import { reviewedContentApproval } from '../packages/platform/src/reviewed-content-approval.js'
 import { reviewedCaliforniaCatalog } from '../packages/platform/src/reviewed-content.js'
@@ -7,6 +8,9 @@ const approval = reviewedContentApproval
 const digest = createHash('sha256').update(JSON.stringify({ ...reviewedCaliforniaCatalog, approval: undefined })).digest('hex')
 if (approval.approvedByGitIdentity !== 'fchery87' || approval.reviewIntervalDays !== 90) throw new Error('Reviewed content approval identity or cadence is invalid')
 if (approval.catalogSha256 !== digest) throw new Error('Reviewed content approval does not bind this catalog digest')
+if (!/^[0-9a-f]{40}$/i.test(approval.reviewedCommit)) throw new Error('Reviewed content approval lacks a commit')
+const author = execFileSync('git', ['show', '-s', '--format=%an <%ae>', approval.reviewedCommit], { encoding: 'utf8' }).trim()
+if (author !== `${approval.approvedByGitIdentity} <${approval.approvedByEmail}>`) throw new Error('Reviewed content approval commit does not match the recorded reviewer')
 if (Date.parse(approval.reReviewDueAt) - Date.parse(approval.approvedAt) !== 90 * 24 * 60 * 60 * 1000) throw new Error('Reviewed content re-review date must be 90 days after approval')
 if (Date.parse(approval.reReviewDueAt) < Date.now()) throw new Error('Reviewed content is overdue for re-review')
 const authorities = new Set(reviewedCaliforniaCatalog.authorities.map(item => item.id))

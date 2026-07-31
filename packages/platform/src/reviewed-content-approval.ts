@@ -7,5 +7,5 @@ export const reviewedContentApproval = {
   // Filled by the human-attributed approval commit. It is the canonical SHA-256
   // of the content catalog excluding this approval record.
   catalogSha256: '34d29183142f59d60e59edecfb6a1cd999bc3c4e0f4683c765672a84f9530e06',
-  reviewedCommit: 'PENDING',
+  reviewedCommit: 'e3047aa2c6261868a7791a630b82a385102829ac',
 } as const

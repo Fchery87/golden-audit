@@ -380,7 +380,7 @@ export class CreditAnalysisPlatform {
     if (this.catalog) return
     const contentForDigest = { ...catalog, approval: undefined }
     const catalogDigest = createHash('sha256').update(JSON.stringify(contentForDigest)).digest('hex')
-    if (catalog.approval.approvedByGitIdentity !== 'fchery87' || catalog.approval.catalogSha256 !== catalogDigest) throw new Error('Reviewed content approval does not match this catalog')
+    if (catalog.approval.approvedByGitIdentity !== 'fchery87' || catalog.approval.reviewedCommit === 'PENDING' || catalog.approval.catalogSha256 !== catalogDigest) throw new Error('Reviewed content approval does not match this catalog')
     if (catalog.approval.reviewIntervalDays !== 90 || Date.parse(catalog.approval.reReviewDueAt) - Date.parse(catalog.approval.approvedAt) !== 90 * 24 * 60 * 60 * 1000) throw new Error('Reviewed content has an invalid re-review interval')
     if (Date.parse(catalog.approval.reReviewDueAt) < Date.now()) throw new Error('Reviewed content is overdue for re-review')
     const authorityIds = new Set(catalog.authorities.map(item => item.id))
