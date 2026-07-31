@@ -243,6 +243,7 @@ Set:
   ```bash
   npm install && npm run build:web
   ```
+  (`build:web` installs the nested client dependencies before running the Vite build.)
 - **Build output directory**:
   ```bash
   apps/web/client/dist

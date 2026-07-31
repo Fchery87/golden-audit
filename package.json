@@ -6,7 +6,7 @@
   "scripts": {
     "dev:web": "tsx apps/web/src/server.ts",
     "dev:client": "cd apps/web/client && npm run dev",
-    "build:web": "cd apps/web/client && npm run build",
+    "build:web": "cd apps/web/client && npm install && npm run build",
     "dev:all": "node scripts/dev-all.mjs",
     "build": "tsc --noEmit && node scripts/build-check.mjs",
     "typecheck": "tsc --noEmit",

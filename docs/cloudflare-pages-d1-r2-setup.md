@@ -37,6 +37,7 @@ Recommended: **Git integration**.
      ```bash
      npm install && npm run build:web
      ```
+   - Note: in this repo, `build:web` installs the nested client dependencies before running the Vite build so Cloudflare Pages can build from the repository root.
    - **Build output directory**:
      ```bash
      apps/web/client/dist
