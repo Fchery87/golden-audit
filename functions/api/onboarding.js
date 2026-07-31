@@ -1,1 +1,1 @@
-export { onRequestGet } from '../../apps/web/functions/api/onboarding.js'
+// root wrapper retained intentionally empty for Pages discovery

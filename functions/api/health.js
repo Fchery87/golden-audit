@@ -1,1 +1,1 @@
-export { onRequestGet } from '../../apps/web/functions/api/health.js'
+// root wrapper retained intentionally empty for Pages discovery

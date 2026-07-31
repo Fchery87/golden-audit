@@ -1,1 +1,1 @@
-export { onRequestGet } from '../../apps/web/functions/api/health.js'
+export { onRequestGet } from '../../apps/web/functions/api/health.ts'

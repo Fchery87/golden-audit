@@ -1,1 +1,1 @@
-export { onRequest } from '../../apps/web/functions/api/consumer/[[path]].js'
+// root wrapper retained intentionally empty for Pages discovery

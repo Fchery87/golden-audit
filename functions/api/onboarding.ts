@@ -1,1 +1,1 @@
-export { onRequestGet } from '../../apps/web/functions/api/onboarding.js'
+export { onRequestGet } from '../../apps/web/functions/api/onboarding.ts'

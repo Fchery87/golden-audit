@@ -1,4 +1,3 @@
-import { Response } from '@cloudflare/workers-types'
 import type { D1Database, PagesFunction, R2Bucket } from '@cloudflare/workers-types'
 import { CreditAnalysisPlatform, type LaunchScope, type PilotApprovalRecordFile, type PlatformSnapshot } from '../../../../packages/platform/src/index.js'
 import { buildPilotAvailabilityPayload, buildPilotOnboardingPayload } from '../../src/pilot-state.js'
@@ -101,13 +100,6 @@ async function loadUploadBlob(env: PilotPagesEnv, uploadId: string): Promise<Uin
   return new Uint8Array(await object.arrayBuffer())
 }
 
-async function respondWithJson(env: PilotPagesEnv, body: unknown, status = 200): Promise<Response> {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { 'content-type': 'application/json; charset=utf-8' },
-  })
-}
-
 export async function withPlatform<T>(env: PilotPagesEnv, mutate: (platform: CreditAnalysisPlatform) => Promise<T> | T): Promise<T> {
   const platform = await loadPlatform(env)
   const result = await mutate(platform)
@@ -131,4 +123,4 @@ export async function fetchUploadContent(env: PilotPagesEnv, uploadId: string): 
   return loadUploadBlob(env, uploadId)
 }
 
-export { respondWithJson, seedApprovalRecord }
+export { buildPilotAvailabilityPayload, buildPilotOnboardingPayload, seedApprovalRecord }
