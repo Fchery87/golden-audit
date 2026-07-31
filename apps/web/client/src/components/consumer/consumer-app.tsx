@@ -37,6 +37,16 @@ export function ConsumerApp() {
     try { const consumerReport = await api.getConsumerReport(id); const summary = dashboard?.reports.find(item => item.id === id); setReport({ report: consumerReport, exportId: summary?.exportId ?? null }); setScreen('home') } catch (cause) { setError(cause instanceof Error ? cause.message : 'Unable to load report') }
   }
 
+  async function openCompletedReport(id: string) {
+    setError(null)
+    try {
+      const [consumerReport, current] = await Promise.all([api.getConsumerReport(id), api.getDashboard()])
+      setDashboard(current)
+      setReport({ report: consumerReport, exportId: current.reports.find(item => item.id === id)?.exportId ?? null })
+      setScreen('home')
+    } catch (cause) { setError(cause instanceof Error ? cause.message : 'Unable to load report') }
+  }
+
   if (loading) return <p className="flex items-center gap-2 py-20 text-sm text-muted-foreground" role="status"><Loader2 className="h-4 w-4 animate-spin" /> Loading your account…</p>
   if (!dashboard) return <AuthScreen onAuthenticated={refresh} />
 
@@ -47,7 +57,7 @@ export function ConsumerApp() {
         <div className="flex gap-4"><button className="underline underline-offset-4" onClick={() => { setScreen('home'); setReport(null) }}>Review</button><button className="underline underline-offset-4" onClick={() => setScreen('account')}>Account</button></div>
       </nav>
       {error && <p role="alert" className="mt-5 flex gap-2 text-sm text-negative"><AlertCircle className="h-4 w-4 shrink-0" /> {error}</p>}
-      {screen === 'account' ? <AccountPanel dashboard={dashboard} onDeleted={() => { setDashboard(null); setReport(null); setScreen('home') }} onOpenReport={openReport} /> : report ? <ReportScreen report={report} onBack={() => setReport(null)} /> : <Onboarding dashboard={dashboard} onRefresh={refresh} onOpenReport={openReport} />}
+      {screen === 'account' ? <AccountPanel dashboard={dashboard} onDeleted={() => { setDashboard(null); setReport(null); setScreen('home') }} onOpenReport={openReport} /> : report ? <ReportScreen report={report} onBack={() => setReport(null)} /> : <Onboarding dashboard={dashboard} onRefresh={refresh} onOpenReport={openReport} onCompletedReport={openCompletedReport} />}
     </section>
   )
 }
@@ -86,11 +96,11 @@ function AuthScreen({ onAuthenticated }: { onAuthenticated: () => Promise<void> 
   </section>
 }
 
-function Onboarding({ dashboard, onRefresh, onOpenReport }: { dashboard: ConsumerDashboard; onRefresh: () => Promise<void>; onOpenReport: (id: string) => Promise<void> }) {
+function Onboarding({ dashboard, onRefresh, onOpenReport, onCompletedReport }: { dashboard: ConsumerDashboard; onRefresh: () => Promise<void>; onOpenReport: (id: string) => Promise<void>; onCompletedReport: (id: string) => Promise<void> }) {
   if (dashboard.reports.length > 0) return <section className="mt-10"><h1 className="font-serif text-3xl tracking-tight">Your reports</h1><p className="mt-3 text-muted-foreground">Choose a completed reading or start another review when you have a new report.</p><ul className="mt-8 divide-y divide-rule border-y border-rule">{dashboard.reports.map(report => <li key={report.id} className="flex flex-wrap items-center justify-between gap-4 py-5"><div><p className="font-medium">Report from {new Date(report.generatedAt).toLocaleDateString()}</p><p className="text-sm text-muted-foreground">{report.findingCount} findings · parser {report.parserVersion}</p></div><Button variant="outline" onClick={() => void onOpenReport(report.id)}><FileText className="h-4 w-4" /> Open report</Button></li>)}</ul></section>
   if (!dashboard.consent) return <ConsentStep onComplete={onRefresh} />
   if (!dashboard.authorization) return <AuthorizationStep onComplete={onRefresh} />
-  return <UploadStep workspaceId={dashboard.workspaceId} onComplete={onOpenReport} />
+  return <UploadStep workspaceId={dashboard.workspaceId} onComplete={onCompletedReport} />
 }
 
 function ConsentStep({ onComplete }: { onComplete: () => Promise<void> }) {
