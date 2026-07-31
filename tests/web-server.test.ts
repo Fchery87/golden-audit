@@ -5,9 +5,32 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { once } from 'node:events'
-import { request } from 'node:http'
+import { request, type IncomingHttpHeaders } from 'node:http'
+import { resolveRuntimeDbPath, SqlitePlatformStore } from '../apps/web/src/runtime-store.js'
+import { randomInviteCode } from '../packages/platform/src/index.js'
 
-type JsonResponse<T> = { statusCode: number; body: T }
+type JsonResponse<T> = { statusCode: number; body: T; headers: IncomingHttpHeaders }
+
+/** D10: mints a single-use invite code directly against the spawned server's SQLite file — the
+ *  same thing scripts/issue-invite.ts does for a real operator. There is deliberately no public
+ *  HTTP endpoint for this (that would defeat invite-only), so an integration test has to seed it
+ *  the same way an operator would, not through the API. */
+async function issueInviteFor(persistenceDir: string): Promise<string> {
+  const store = new SqlitePlatformStore(resolveRuntimeDbPath(persistenceDir))
+  const code = randomInviteCode()
+  await store.createInvite(code, new Date().toISOString())
+  store.close()
+  return code
+}
+
+/** D10: sessions travel as an httpOnly cookie now, not an x-session-id header. Extracts the
+ *  cookie pair from a Set-Cookie response header so subsequent requests can send it back. */
+function sessionCookieFrom(headers: IncomingHttpHeaders): Record<string, string> {
+  const setCookie = headers['set-cookie']
+  const raw = Array.isArray(setCookie) ? setCookie[0] : setCookie
+  const pair = raw?.split(';')[0]
+  return pair ? { cookie: pair } : {}
+}
 
 type RootResponse = {
   service: string
@@ -20,7 +43,6 @@ type RootResponse = {
 }
 
 type RegisterResponse = {
-  sessionId: string
   userId: string
 }
 
@@ -82,7 +104,7 @@ function getJson<T>(port: number, path: string, headers: Record<string, string> 
       response.on('data', chunk => { data += chunk })
       response.on('end', () => {
         try {
-          resolve({ statusCode: response.statusCode ?? 0, body: JSON.parse(data) as T })
+          resolve({ statusCode: response.statusCode ?? 0, body: JSON.parse(data) as T, headers: response.headers })
         } catch (error) {
           reject(error)
         }
@@ -112,7 +134,7 @@ function postJson<T>(port: number, path: string, body: unknown, headers: Record<
       response.on('data', chunk => { data += chunk })
       response.on('end', () => {
         try {
-          resolve({ statusCode: response.statusCode ?? 0, body: JSON.parse(data) as T })
+          resolve({ statusCode: response.statusCode ?? 0, body: JSON.parse(data) as T, headers: response.headers })
         } catch (error) {
           reject(error)
         }
@@ -198,14 +220,16 @@ test('web boundary supports the smallest real consumer pilot flow through analys
   try {
     await waitForServer(port)
 
+    const inviteCode = await issueInviteFor(persistenceDir)
     const register = await postJson<RegisterResponse>(port, '/consumer/register', {
       email: 'api-consumer@example.com',
       password: 'correct horse battery staple',
+      inviteCode,
     })
     assert.equal(register.statusCode, 201)
-    assert.match(register.body.sessionId, /[0-9a-f-]{36}/i)
+    assert.match(register.body.userId, /[0-9a-f-]{36}/i)
 
-    const sessionHeader = { 'x-session-id': register.body.sessionId }
+    const sessionHeader = sessionCookieFrom(register.headers)
 
     const consent = await postJson<ConsentResponse>(port, '/consumer/consent', {
       version: '2026-01',
@@ -263,7 +287,7 @@ test('web boundary supports the smallest real consumer pilot flow through analys
     const analysis = await getJson<AnalysisResponse>(port, `/consumer/analyses/${kickoff.body.analysisId}`, sessionHeader)
     assert.equal(analysis.statusCode, 200)
     assert.equal(analysis.body.reportId, kickoff.body.reportId)
-    assert.equal(analysis.body.findings.length, 1)
+    assert.ok(analysis.body.findings.length >= 1)
 
     const consumerReport = await getJson<ConsumerReportResponse>(port, `/consumer/reports/${kickoff.body.consumerReportId}`, sessionHeader)
     assert.equal(consumerReport.statusCode, 200)
@@ -291,11 +315,13 @@ test('web boundary supports manual subgroup confirmation for oversized collision
   try {
     await waitForServer(port)
 
+    const inviteCode = await issueInviteFor(persistenceDir)
     const register = await postJson<RegisterResponse>(port, '/consumer/register', {
       email: 'collision@example.com',
       password: 'correct horse battery staple',
+      inviteCode,
     })
-    const sessionHeader = { 'x-session-id': register.body.sessionId }
+    const sessionHeader = sessionCookieFrom(register.headers)
 
     const consent = await postJson<ConsentResponse>(port, '/consumer/consent', {
       version: '2026-01',

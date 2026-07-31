@@ -12,6 +12,7 @@
     "typecheck": "tsc --noEmit",
     "test": "tsx --test",
     "db:migrate": "tsx scripts/migrate.ts",
+    "issue-invite": "tsx scripts/issue-invite.ts",
     "health": "tsx scripts/smoke.ts",
     "verify:pilot": "npm run typecheck && npm test && npm run db:migrate && npm run health",
     "verify:release": "node scripts/verify-release.mjs",
@@ -26,5 +27,8 @@
     "tsx": "^4.23.1",
     "typescript": "^5.7.2",
     "wrangler": "^4.27.0"
+  },
+  "dependencies": {
+    "unpdf": "^1.8.0"
   }
 }

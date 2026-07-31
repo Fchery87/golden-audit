@@ -32,7 +32,16 @@ export type EvaluableRule = {
  *  type satisfies this structurally, so no type duplication is required. */
 export type EvaluableTradeline = {
   id: string
+  bureau?: string
+  creditor?: { normalized: string | null; source?: SourceReference }
+  maskedAccount?: { normalized: string | null; source?: SourceReference }
+  accountType?: { normalized: string | null; confidence?: number; source?: SourceReference }
   balance: { normalized: number | null; confidence: number; source: SourceReference }
+  creditLimit?: { normalized: number | null; confidence: number; source: SourceReference }
+  pastDue?: { normalized: number | null; confidence: number; source: SourceReference }
+  status?: { normalized: string | null; confidence: number; source: SourceReference }
+  opened?: { normalized: string | null; confidence: number; source: SourceReference }
+  updated?: { normalized: string | null; confidence: number; source: SourceReference }
 }
 
 export type MatchRef = { tradelineIds: string[] }
@@ -53,45 +62,462 @@ export function registerRuleEvaluator(name: string, evaluator: RuleEvaluator): v
   evaluators.set(name, evaluator)
 }
 
-// --- Built-in evaluator: cross-bureau balance difference ---
+function matchEvidenceSignature(match: MatchRef): string {
+  return JSON.stringify([...match.tradelineIds].sort())
+}
+
+function suppress(ruleId: string, reason: string): RuleAudit {
+  return { ruleId, outcome: 'suppressed', reason }
+}
+
+function skip(ruleId: string, reason: string): RuleAudit {
+  return { ruleId, outcome: 'skipped', reason }
+}
+
+function trigger(ruleId: string, reason: string): RuleAudit {
+  return { ruleId, outcome: 'triggered', reason }
+}
+
+function confidenceOf(value: { confidence?: number } | undefined): number {
+  return value?.confidence ?? 0
+}
+
+function distinctBureauLines(lines: EvaluableTradeline[]): EvaluableTradeline[] {
+  const unique = new Map<string, EvaluableTradeline>()
+  for (const line of lines) {
+    const bureau = line.bureau ?? `unknown:${line.id}`
+    if (!unique.has(bureau)) unique.set(bureau, line)
+  }
+  return [...unique.values()]
+}
+
+function duplicateBureauLines(lines: EvaluableTradeline[]): EvaluableTradeline[][] {
+  const byBureau = new Map<string, EvaluableTradeline[]>()
+  for (const line of lines) {
+    const bureau = line.bureau ?? 'unknown'
+    byBureau.set(bureau, [...(byBureau.get(bureau) ?? []), line])
+  }
+  return [...byBureau.values()].filter(group => group.length > 1)
+}
+
+function makeEvidenceField(
+  line: EvaluableTradeline,
+  field: 'balance' | 'creditLimit' | 'pastDue' | 'status' | 'opened' | 'updated' | 'accountType' | 'maskedAccount',
+  fallback: SourceReference,
+): Evidence {
+  const slot = field === 'balance'
+    ? line.balance
+    : field === 'creditLimit'
+      ? line.creditLimit
+      : field === 'pastDue'
+        ? line.pastDue
+        : field === 'status'
+          ? line.status
+          : field === 'opened'
+            ? line.opened
+            : field === 'updated'
+              ? line.updated
+              : field === 'accountType'
+                ? line.accountType
+                : line.maskedAccount
+  return {
+    tradelineId: line.id,
+    field,
+    value: slot?.normalized ?? '',
+    source: slot?.source ?? fallback,
+  }
+}
+
+function compareComparableField<T>(args: {
+  rule: EvaluableRule
+  lines: EvaluableTradeline[]
+  field: 'balance' | 'creditLimit' | 'pastDue' | 'status' | 'opened' | 'updated'
+  title: string
+  reasonWhenAgree: string
+  reasonWhenDiffer: string
+  severity: Severity
+  alternativeExplanations: string[]
+  verificationDocuments: string[]
+  suggestedAction: string
+  limitationsOnTrivialMagnitude?: string
+}): EvaluatorResult {
+  const { rule, lines, field, title, reasonWhenAgree, reasonWhenDiffer, severity, alternativeExplanations, verificationDocuments, suggestedAction } = args
+  const audits: RuleAudit[] = []
+  const findings: Omit<Finding, 'id'>[] = []
+
+  const distinct = distinctBureauLines(lines)
+  if (distinct.length < 2) {
+    audits.push(skip(rule.id, 'Need at least two distinct bureaus for comparison'))
+    return { audits, findings }
+  }
+
+  const values = distinct.map(line => field === 'balance' ? line.balance : line[field])
+  if (values.some(value => !value || value.normalized === null || confidenceOf(value) < rule.minimumConfidence)) {
+    audits.push(suppress(rule.id, `Missing or low-confidence ${field}`))
+    return { audits, findings }
+  }
+
+  const normalized = values.map(value => value?.normalized)
+  const differ = new Set(normalized).size > 1
+  if (!differ) {
+    audits.push(skip(rule.id, reasonWhenAgree))
+    return { audits, findings }
+  }
+
+  let finalSeverity = severity
+  const finalLimitations = [...rule.limitations]
+  if ((field === 'balance' || field === 'creditLimit' || field === 'pastDue') && rule.minimumMagnitude !== undefined) {
+    const nums = normalized.filter((value): value is number => typeof value === 'number')
+    const magnitude = Math.max(...nums) - Math.min(...nums)
+    if (magnitude < rule.minimumMagnitude) {
+      finalSeverity = 'low'
+      finalLimitations.push(args.limitationsOnTrivialMagnitude ?? 'The balance difference is small and likely a reporting-date artifact')
+    }
+  }
+
+  findings.push({
+    classification: rule.classification,
+    title,
+    severity: finalSeverity,
+    confidence: Math.min(...values.map(value => confidenceOf(value))),
+    evidence: distinct.map(line => makeEvidenceField(line, field, line.balance.source)),
+    limitations: finalLimitations,
+    alternativeExplanations,
+    verificationDocuments,
+    authorityIds: rule.authorityIds,
+    educationModuleIds: rule.educationModuleIds,
+    suggestedAction,
+  })
+  audits.push(trigger(rule.id, reasonWhenDiffer))
+  return { audits, findings }
+}
+
+// --- Built-in evaluators ---
 const crossBureauBalanceDifference: RuleEvaluator = ({ rule, tradelinesById, confirmedMatches }) => {
   const audits: RuleAudit[] = []
   const findings: Omit<Finding, 'id'>[] = []
   for (const match of confirmedMatches) {
-    const lines = match.tradelineIds
-      .map(id => tradelinesById.get(id))
-      .filter((line): line is EvaluableTradeline => line !== undefined)
-    if (lines.length === 0) continue
-    if (lines.some(line => line.balance.confidence < rule.minimumConfidence || line.balance.normalized === null)) {
-      audits.push({ ruleId: rule.id, outcome: 'suppressed', reason: 'Missing or low-confidence balance' })
-      continue
-    }
-    const balances = new Set(lines.map(line => line.balance.normalized))
-    if (balances.size > 1) {
-      const values = lines.map(line => line.balance.normalized ?? 0)
-      const magnitude = Math.max(...values) - Math.min(...values)
-      const trivial = rule.minimumMagnitude !== undefined && magnitude < rule.minimumMagnitude
-      findings.push({
-        classification: rule.classification,
-        title: 'Bureau balances differ',
-        severity: trivial ? 'low' : 'medium',
-        confidence: Math.min(...lines.map(line => line.balance.confidence)),
-        evidence: lines.map(line => ({ tradelineId: line.id, field: 'balance', value: line.balance.normalized ?? 0, source: line.balance.source })),
-        limitations: trivial ? [...rule.limitations, 'The balance difference is small and likely a reporting-date artifact'] : rule.limitations,
-        alternativeExplanations: ['Bureaus may have received updates on different dates'],
-        verificationDocuments: ['Recent creditor statement'],
-        authorityIds: rule.authorityIds,
-        educationModuleIds: rule.educationModuleIds,
-        suggestedAction: 'Compare the displayed dates and verify the current balance with the creditor',
-      })
-      audits.push({ ruleId: rule.id, outcome: 'triggered', reason: trivial ? 'Comparable balances differ (down-ranked: trivial magnitude)' : 'Comparable balances differ' })
-    } else {
-      audits.push({ ruleId: rule.id, outcome: 'skipped', reason: 'Comparable balances agree' })
-    }
+    const lines = match.tradelineIds.map(id => tradelinesById.get(id)).filter((line): line is EvaluableTradeline => line !== undefined)
+    const result = compareComparableField<number>({
+      rule,
+      lines,
+      field: 'balance',
+      title: 'Bureau balances differ',
+      reasonWhenAgree: 'Comparable balances agree',
+      reasonWhenDiffer: 'Comparable balances differ',
+      severity: 'medium',
+      alternativeExplanations: ['Bureaus may have received updates on different dates'],
+      verificationDocuments: ['Recent creditor statement'],
+      suggestedAction: 'Compare the displayed dates and verify the current balance with the creditor',
+    })
+    audits.push(...result.audits)
+    findings.push(...result.findings)
   }
   return { audits, findings }
 }
 registerRuleEvaluator('cross-bureau-balance-difference', crossBureauBalanceDifference)
+
+const crossBureauCreditLimitDifference: RuleEvaluator = ({ rule, tradelinesById, confirmedMatches }) => {
+  const audits: RuleAudit[] = []
+  const findings: Omit<Finding, 'id'>[] = []
+  for (const match of confirmedMatches) {
+    const lines = match.tradelineIds.map(id => tradelinesById.get(id)).filter((line): line is EvaluableTradeline => line !== undefined)
+    const result = compareComparableField<number>({
+      rule,
+      lines,
+      field: 'creditLimit',
+      title: 'Bureau credit limits differ',
+      reasonWhenAgree: 'Comparable credit limits agree',
+      reasonWhenDiffer: 'Comparable credit limits differ',
+      severity: 'medium',
+      alternativeExplanations: ['A bureau may show high credit instead of the current revolving credit limit'],
+      verificationDocuments: ['Recent creditor statement'],
+      suggestedAction: 'Verify the current credit limit with the creditor and compare it with each bureau entry',
+    })
+    audits.push(...result.audits)
+    findings.push(...result.findings)
+  }
+  return { audits, findings }
+}
+registerRuleEvaluator('cross-bureau-credit-limit-difference', crossBureauCreditLimitDifference)
+
+const crossBureauPastDueDifference: RuleEvaluator = ({ rule, tradelinesById, confirmedMatches }) => {
+  const audits: RuleAudit[] = []
+  const findings: Omit<Finding, 'id'>[] = []
+  for (const match of confirmedMatches) {
+    const lines = match.tradelineIds.map(id => tradelinesById.get(id)).filter((line): line is EvaluableTradeline => line !== undefined)
+    const result = compareComparableField<number>({
+      rule,
+      lines,
+      field: 'pastDue',
+      title: 'Bureau past-due amounts differ',
+      reasonWhenAgree: 'Comparable past-due amounts agree',
+      reasonWhenDiffer: 'Comparable past-due amounts differ',
+      severity: 'medium',
+      alternativeExplanations: ['Bureaus may have received account updates on different dates'],
+      verificationDocuments: ['Recent creditor statement'],
+      suggestedAction: 'Verify the current past-due amount with the creditor and compare it with each bureau entry',
+    })
+    audits.push(...result.audits)
+    findings.push(...result.findings)
+  }
+  return { audits, findings }
+}
+registerRuleEvaluator('cross-bureau-past-due-difference', crossBureauPastDueDifference)
+
+function isClosedOrPaid(status: string): boolean {
+  return /\b(closed|paid|settled)\b/i.test(status)
+}
+
+const closedOrPaidWithBalance: RuleEvaluator = ({ rule, tradelinesById, confirmedMatches }) => {
+  const audits: RuleAudit[] = []
+  const findings: Omit<Finding, 'id'>[] = []
+  const seen = new Set<string>()
+  for (const match of confirmedMatches) {
+    for (const id of match.tradelineIds) {
+      const line = tradelinesById.get(id)
+      if (!line || seen.has(id)) continue
+      seen.add(id)
+      if (!line.status || line.status.normalized === null || line.balance.normalized === null || confidenceOf(line.status) < rule.minimumConfidence || line.balance.confidence < rule.minimumConfidence) {
+        audits.push(suppress(rule.id, 'Missing or low-confidence account status or balance'))
+        continue
+      }
+      if (!isClosedOrPaid(line.status.normalized) || line.balance.normalized <= 0) {
+        audits.push(skip(rule.id, 'Account status and balance are not internally contradictory'))
+        continue
+      }
+      findings.push({
+        classification: rule.classification,
+        title: 'Closed or paid account reports a balance',
+        severity: 'medium',
+        confidence: Math.min(confidenceOf(line.status), line.balance.confidence),
+        evidence: [makeEvidenceField(line, 'status', line.balance.source), makeEvidenceField(line, 'balance', line.balance.source)],
+        limitations: rule.limitations,
+        alternativeExplanations: ['The status and balance may have been reported at different times'],
+        verificationDocuments: ['Recent creditor statement'],
+        authorityIds: rule.authorityIds,
+        educationModuleIds: rule.educationModuleIds,
+        suggestedAction: 'Compare the status and balance with the creditor’s current account record',
+      })
+      audits.push(trigger(rule.id, 'Closed or paid status appears with a positive balance'))
+    }
+  }
+  return { audits, findings }
+}
+registerRuleEvaluator('closed-or-paid-with-balance', closedOrPaidWithBalance)
+
+const pastDueExceedsBalance: RuleEvaluator = ({ rule, tradelinesById, confirmedMatches }) => {
+  const audits: RuleAudit[] = []
+  const findings: Omit<Finding, 'id'>[] = []
+  const seen = new Set<string>()
+  for (const match of confirmedMatches) {
+    for (const id of match.tradelineIds) {
+      const line = tradelinesById.get(id)
+      if (!line || seen.has(id)) continue
+      seen.add(id)
+      if (!line.pastDue || line.pastDue.normalized === null || line.balance.normalized === null || confidenceOf(line.pastDue) < rule.minimumConfidence || line.balance.confidence < rule.minimumConfidence) {
+        audits.push(suppress(rule.id, 'Missing or low-confidence past-due amount or balance'))
+        continue
+      }
+      if (line.pastDue.normalized <= line.balance.normalized) {
+        audits.push(skip(rule.id, 'Past-due amount does not exceed balance'))
+        continue
+      }
+      findings.push({
+        classification: rule.classification,
+        title: 'Past-due amount exceeds reported balance',
+        severity: 'medium',
+        confidence: Math.min(confidenceOf(line.pastDue), line.balance.confidence),
+        evidence: [makeEvidenceField(line, 'pastDue', line.balance.source), makeEvidenceField(line, 'balance', line.balance.source)],
+        limitations: rule.limitations,
+        alternativeExplanations: ['The fields may have been updated on different reporting cycles'],
+        verificationDocuments: ['Recent creditor statement'],
+        authorityIds: rule.authorityIds,
+        educationModuleIds: rule.educationModuleIds,
+        suggestedAction: 'Compare the reported balance and past-due amount with the creditor’s current account record',
+      })
+      audits.push(trigger(rule.id, 'Past-due amount exceeds reported balance'))
+    }
+  }
+  return { audits, findings }
+}
+registerRuleEvaluator('past-due-exceeds-balance', pastDueExceedsBalance)
+
+const revolvingWithoutCreditLimit: RuleEvaluator = ({ rule, tradelinesById, confirmedMatches }) => {
+  const audits: RuleAudit[] = []
+  const findings: Omit<Finding, 'id'>[] = []
+  const seen = new Set<string>()
+  for (const match of confirmedMatches) {
+    for (const id of match.tradelineIds) {
+      const line = tradelinesById.get(id)
+      if (!line || seen.has(id)) continue
+      seen.add(id)
+      if (!line.accountType || line.accountType.normalized === null || confidenceOf(line.accountType) < rule.minimumConfidence) {
+        audits.push(suppress(rule.id, 'Missing or low-confidence account type'))
+        continue
+      }
+      if (!/revolving|credit\s*card/i.test(line.accountType.normalized)) {
+        audits.push(skip(rule.id, 'Account is not identified as revolving'))
+        continue
+      }
+      if (line.creditLimit && line.creditLimit.normalized !== null && confidenceOf(line.creditLimit) >= rule.minimumConfidence) {
+        audits.push(skip(rule.id, 'Revolving account includes a credit limit or high credit value'))
+        continue
+      }
+      findings.push({
+        classification: rule.classification,
+        title: 'Revolving account has no reported credit limit',
+        severity: 'low',
+        confidence: confidenceOf(line.accountType),
+        evidence: [makeEvidenceField(line, 'accountType', line.balance.source), makeEvidenceField(line, 'creditLimit', line.balance.source)],
+        limitations: rule.limitations,
+        alternativeExplanations: ['Some furnishers report high credit instead of a current credit limit'],
+        verificationDocuments: ['Recent creditor statement'],
+        authorityIds: rule.authorityIds,
+        educationModuleIds: rule.educationModuleIds,
+        suggestedAction: 'Use the creditor statement to confirm whether a credit limit or high-credit value should appear',
+      })
+      audits.push(trigger(rule.id, 'Revolving account has no high-credit or credit-limit value'))
+    }
+  }
+  return { audits, findings }
+}
+registerRuleEvaluator('revolving-without-credit-limit', revolvingWithoutCreditLimit)
+
+const crossBureauStatusDifference: RuleEvaluator = ({ rule, tradelinesById, confirmedMatches }) => {
+  const audits: RuleAudit[] = []
+  const findings: Omit<Finding, 'id'>[] = []
+  for (const match of confirmedMatches) {
+    const lines = match.tradelineIds.map(id => tradelinesById.get(id)).filter((line): line is EvaluableTradeline => line !== undefined)
+    const result = compareComparableField<string>({
+      rule,
+      lines,
+      field: 'status',
+      title: 'Bureau account statuses differ',
+      reasonWhenAgree: 'Comparable account statuses agree',
+      reasonWhenDiffer: 'Comparable account statuses differ',
+      severity: 'medium',
+      alternativeExplanations: ['Bureaus may update account status on different dates'],
+      verificationDocuments: ['Recent creditor statement'],
+      suggestedAction: 'Verify the current account status directly with the creditor and compare it against each bureau entry',
+    })
+    audits.push(...result.audits)
+    findings.push(...result.findings)
+  }
+  return { audits, findings }
+}
+registerRuleEvaluator('cross-bureau-status-difference', crossBureauStatusDifference)
+
+const crossBureauDateOpenedDifference: RuleEvaluator = ({ rule, tradelinesById, confirmedMatches }) => {
+  const audits: RuleAudit[] = []
+  const findings: Omit<Finding, 'id'>[] = []
+  for (const match of confirmedMatches) {
+    const lines = match.tradelineIds.map(id => tradelinesById.get(id)).filter((line): line is EvaluableTradeline => line !== undefined)
+    const result = compareComparableField<string>({
+      rule,
+      lines,
+      field: 'opened',
+      title: 'Bureau opened dates differ',
+      reasonWhenAgree: 'Comparable opened dates agree',
+      reasonWhenDiffer: 'Comparable opened dates differ',
+      severity: 'medium',
+      alternativeExplanations: ['A bureau may have received the account history later than another bureau'],
+      verificationDocuments: ['Original account opening documents', 'Recent creditor statement'],
+      suggestedAction: 'Compare the reported opened date with the creditor records for this account',
+    })
+    audits.push(...result.audits)
+    findings.push(...result.findings)
+  }
+  return { audits, findings }
+}
+registerRuleEvaluator('cross-bureau-date-opened-difference', crossBureauDateOpenedDifference)
+
+const crossBureauLastReportedDifference: RuleEvaluator = ({ rule, tradelinesById, confirmedMatches }) => {
+  const audits: RuleAudit[] = []
+  const findings: Omit<Finding, 'id'>[] = []
+  for (const match of confirmedMatches) {
+    const lines = match.tradelineIds.map(id => tradelinesById.get(id)).filter((line): line is EvaluableTradeline => line !== undefined)
+    const result = compareComparableField<string>({
+      rule,
+      lines,
+      field: 'updated',
+      title: 'Bureau last-reported dates differ',
+      reasonWhenAgree: 'Comparable last-reported dates agree',
+      reasonWhenDiffer: 'Comparable last-reported dates differ',
+      severity: 'low',
+      alternativeExplanations: ['Different bureaus often receive updates on different cycles'],
+      verificationDocuments: ['Recent creditor statement'],
+      suggestedAction: 'Use the reported dates as context when reviewing other differences on this account',
+    })
+    audits.push(...result.audits)
+    findings.push(...result.findings)
+  }
+  return { audits, findings }
+}
+registerRuleEvaluator('cross-bureau-last-reported-difference', crossBureauLastReportedDifference)
+
+const duplicateTradelineWithinBureau: RuleEvaluator = ({ rule, tradelinesById, confirmedMatches }) => {
+  const audits: RuleAudit[] = []
+  const findings: Omit<Finding, 'id'>[] = []
+  for (const match of confirmedMatches) {
+    const lines = match.tradelineIds.map(id => tradelinesById.get(id)).filter((line): line is EvaluableTradeline => line !== undefined)
+    const duplicates = duplicateBureauLines(lines)
+    if (duplicates.length === 0) {
+      audits.push(skip(rule.id, 'No same-bureau duplicates in the confirmed match'))
+      continue
+    }
+    for (const group of duplicates) {
+      const bureau = group[0]?.bureau ?? 'unknown'
+      findings.push({
+        classification: rule.classification,
+        title: `Possible duplicate tradeline on ${bureau}`,
+        severity: 'medium',
+        confidence: Math.min(...group.map(line => line.balance.confidence)),
+        evidence: group.map(line => makeEvidenceField(line, 'maskedAccount', line.balance.source)),
+        limitations: rule.limitations,
+        alternativeExplanations: ['A bureau may list separate updates for the same furnisher entry'],
+        verificationDocuments: ['Full credit report copy', 'Recent creditor statement'],
+        authorityIds: rule.authorityIds,
+        educationModuleIds: rule.educationModuleIds,
+        suggestedAction: 'Review the bureau entries line by line to confirm whether these are true duplicates or separate accounts',
+      })
+      audits.push(trigger(rule.id, `Same-bureau duplicate detected for ${bureau}`))
+    }
+  }
+  return { audits, findings }
+}
+registerRuleEvaluator('duplicate-tradeline-within-bureau', duplicateTradelineWithinBureau)
+
+const partialFurnishingObservation: RuleEvaluator = ({ rule, tradelinesById, confirmedMatches }) => {
+  const audits: RuleAudit[] = []
+  const findings: Omit<Finding, 'id'>[] = []
+  const partialMatches = confirmedMatches
+    .map(match => ({ signature: matchEvidenceSignature(match), lines: match.tradelineIds.map(id => tradelinesById.get(id)).filter((line): line is EvaluableTradeline => line !== undefined) }))
+    .filter(entry => distinctBureauLines(entry.lines).length >= 2 && distinctBureauLines(entry.lines).length < 3)
+
+  if (partialMatches.length === 0) {
+    audits.push(skip(rule.id, 'No partial furnishing matches found'))
+    return { audits, findings }
+  }
+
+  const evidence = partialMatches.flatMap(entry => distinctBureauLines(entry.lines).map(line => makeEvidenceField(line, 'maskedAccount', line.balance.source)))
+  findings.push({
+    classification: rule.classification,
+    title: `${partialMatches.length} account${partialMatches.length === 1 ? '' : 's'} reported by fewer than three bureaus`,
+    severity: 'low',
+    confidence: Math.min(...evidence.map(item => item.source ? 1 : 1)),
+    evidence,
+    limitations: rule.limitations,
+    alternativeExplanations: ['Partial furnishing can be normal and does not by itself indicate an error'],
+    verificationDocuments: ['Full credit report copy'],
+    authorityIds: rule.authorityIds,
+    educationModuleIds: rule.educationModuleIds,
+    suggestedAction: 'Use this as context when reviewing the rest of the report; not every account is expected to appear on all three bureaus',
+  })
+  audits.push(trigger(rule.id, 'Observed partial furnishing across confirmed matches'))
+  return { audits, findings }
+}
+registerRuleEvaluator('partial-furnishing-observation', partialFurnishingObservation)
 
 export type AnalysisInput = {
   rules: EvaluableRule[]
@@ -123,11 +549,11 @@ export function evaluateAnalysis(input: AnalysisInput): Analysis {
 
   // Deterministic deduplication: findings sharing the same evidence signature
   // (tradelineId + value, sorted) and thus the same consumer action are grouped.
-  const signature = (evidence: Evidence[]) => JSON.stringify(evidence.map(item => [item.tradelineId, item.value]).sort())
+  const signature = (evidence: Evidence[]) => JSON.stringify(evidence.map(item => [item.tradelineId, item.field, item.value]).sort())
   const findings: Finding[] = []
   const seen = new Set<string>()
   for (const candidate of rawFindings) {
-    const sig = signature(candidate.evidence)
+    const sig = `${candidate.title}|${signature(candidate.evidence)}`
     if (seen.has(sig)) continue
     seen.add(sig)
     findings.push({ ...candidate, id: randomUUID() })

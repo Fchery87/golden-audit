@@ -2,6 +2,7 @@ import { redactReportText, containsUnredactedIdentifier } from '../../redaction/
 import { detectFormat } from './detector.js'
 import { parseStructuredHtml } from './html-adapter.js'
 import { parseBboxHtml } from './bbox-extractor.js'
+import { extractWordsFromPdfBytes } from './pdfjs-extractor.js'
 import { parseIdentityIqPdf } from './identityiq-pdf-adapter.js'
 import type { ParserReport } from './types.js'
 
@@ -72,14 +73,25 @@ export function redactWords(words: Word[]): Word[] {
   return words.map(w => (containsUnredactedIdentifier(w.text) ? { ...w, text: '[REDACTED]' } : w))
 }
 
-/** IdentityIQ PDF entry point: poppler -bbox HTML → positional words → redact → adapter. */
+/** IdentityIQ PDF entry point (legacy poppler path — retained for the Phase 0 diff harness only). */
 export function parseIdentityIqPdfBbox(bboxHtml: string): ParserReport {
   return parseIdentityIqPdf(redactWords(parseBboxHtml(bboxHtml)))
+}
+
+/**
+ * IdentityIQ PDF entry point (production path, docs/consumer-workflow-implementation-plan.md D3):
+ * raw PDF bytes → pdfjs (unpdf) positional words → redact → adapter. No child_process, no
+ * native binary — runs on Cloudflare Workers/Pages Functions.
+ */
+export async function parseIdentityIqPdfBytes(bytes: Uint8Array): Promise<ParserReport> {
+  const words = await extractWordsFromPdfBytes(bytes)
+  return parseIdentityIqPdf(redactWords(words))
 }
 
 export { detectFormat } from './detector.js'
 export { parseStructuredHtml } from './html-adapter.js'
 export { parseBboxHtml } from './bbox-extractor.js'
+export { extractWordsFromPdfBytes } from './pdfjs-extractor.js'
 export { parseIdentityIqPdf } from './identityiq-pdf-adapter.js'
 export { BUREAU_BANDS, CREDITOR_X_MAX, bureauForX, detectBureauColumns, nearestBureau, xCenter } from './positional-types.js'
 export type { Word, BureauColumn } from './positional-types.js'

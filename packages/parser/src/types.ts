@@ -24,7 +24,10 @@ export type ParserTradeline = {
   bureau: Bureau
   creditor: string
   maskedAccount: string
+  accountType: ParserValue<string>
   balance: ParserValue<number>
+  creditLimit: ParserValue<number>
+  pastDue: ParserValue<number>
   status: ParserValue<string>
   opened: ParserValue<string>
   updated: ParserValue<string>

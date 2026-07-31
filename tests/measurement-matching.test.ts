@@ -17,7 +17,7 @@ type InputTradeline = { bureau: Bureau; creditor: string; account: string; balan
 
 function hasBin(bin: string): boolean { try { execSync(`command -v ${bin}`, { stdio: 'ignore' }); return true } catch { return false } }
 function maskAccount(value: string): string { return `••••${value.replace(/\D/g, '').slice(-4)}` }
-function setup() {
+async function setup() {
   const platform = new CreditAnalysisPlatform()
   platform.configureLaunchScope({
     mode: 'one-state-free-pilot',
@@ -29,9 +29,10 @@ function setup() {
     nationwideStatus: 'not-cleared',
     notes: 'Analysis-only, educational, consumer-uploaded, consumer-only boundary.',
   })
-  const account = platform.register({ email: 'measure-matching@example.com', password })
-  const workspace = platform.recordConsent(account.sessionId, consent)
-  platform.acceptAuthorization(account.sessionId)
+  const inviteCode = await platform.issueInvite()
+  const account = await platform.register({ email: 'measure-matching@example.com', password, inviteCode })
+  const workspace = await platform.recordConsent(account.sessionId, consent)
+  await platform.acceptAuthorization(account.sessionId)
   return { platform, ...account, workspace }
 }
 function makeFixture(tradelines: InputTradeline[]) {
@@ -40,14 +41,14 @@ function makeFixture(tradelines: InputTradeline[]) {
     tradelines: tradelines.map(t => ({ bureau: t.bureau, creditor: t.creditor, account: t.account, accountType: t.accountType ?? 'revolving', balance: t.balance, status: t.status ?? 'open', opened: t.opened ?? '2020-01', updated: t.updated ?? '2026-06-30' })),
   }
 }
-function uploadAndPropose(tradelines: InputTradeline[]) {
-  const { platform, sessionId, workspace } = setup()
-  const initialized = platform.initializeUpload(sessionId, workspace.id)
+async function uploadAndPropose(tradelines: InputTradeline[]) {
+  const { platform, sessionId, workspace } = await setup()
+  const initialized = await platform.initializeUpload(sessionId, workspace.id)
   const bytes = Buffer.from(`<html>GOLDEN-AUDIT-REPORT:${JSON.stringify(makeFixture(tradelines))}</body></html>`)
-  const upload = platform.completeUpload({ uploadId: initialized.id, token: initialized.token, fileName: 'match.html', mediaType: 'text/html', bytes })
-  const report = platform.parseReport(sessionId, upload.id)
-  platform.completeReview(sessionId, report.id)
-  const matches = platform.proposeMatches(sessionId, report.id)
+  const upload = await platform.completeUpload({ uploadId: initialized.id, token: initialized.token, fileName: 'match.html', mediaType: 'text/html', bytes })
+  const report = await platform.parseReport(sessionId, upload.id)
+  await platform.completeReview(sessionId, report.id)
+  const matches = await platform.proposeMatches(sessionId, report.id)
   return { report, matches }
 }
 function memberKey(line: { balance: { bureau: Bureau }; creditor: { normalized: string | null }; maskedAccount: { normalized: string | null } }): string {
@@ -68,7 +69,7 @@ function matchSignature(report: { tradelines: Array<{ id: string; balance: { bur
 // True precision/recall require ground truth, so the synthetic corpus gives exact metrics by construction.
 // Real PDFs have no labels, so that pass is structure-only (coverage/confidence/group-shape), never PPV claims.
 
-test('measurement: matching heuristic precision = 1.0 and recall = 1.0 on the exact-signal corpus', () => {
+test('measurement: matching heuristic precision = 1.0 and recall = 1.0 on the exact-signal corpus', async () => {
   const tradelines: InputTradeline[] = [
     { bureau: 'equifax', creditor: 'Alpha Bank', account: '11111111', balance: 250000 },
     { bureau: 'experian', creditor: 'Alpha Bank', account: '11111111', balance: 250000 },
@@ -81,7 +82,7 @@ test('measurement: matching heuristic precision = 1.0 and recall = 1.0 on the ex
     { bureau: 'experian', creditor: 'Delta Fin.', account: '55555555', balance: 9900 },
     { bureau: 'transunion', creditor: 'Solo Lender', account: '66666666', balance: 120000 },
   ]
-  const { report, matches } = uploadAndPropose(tradelines)
+  const { report, matches } = await uploadAndPropose(tradelines)
   const actual = new Set(matches.map(m => matchSignature(report, m)))
   const expected = new Set([
     [
@@ -103,30 +104,29 @@ test('measurement: matching heuristic precision = 1.0 and recall = 1.0 on the ex
   assert.equal(recall, 1, `recall must be 1.0 — missing groups: ${[...expected].filter(sig => !actual.has(sig)).join('; ')}`)
 })
 
-test('measurement: known limitation — creditor alias variation creates a recall miss', () => {
+test('measurement: known limitation — creditor alias variation creates a recall miss', async () => {
   // Same last-4 / same real account, but creditor strings differ. The current heuristic does not normalize
   // creditor aliases, so it deliberately misses this group. This test keeps the measurement HONEST about
   // what has and has not been proven by the exact-signal corpus.
-  const { matches } = uploadAndPropose([
+  const { matches } = await uploadAndPropose([
     { bureau: 'equifax', creditor: 'Example Bank', account: '77777777', balance: 880000 },
     { bureau: 'experian', creditor: 'Example Bank NA', account: '77777777', balance: 880000 },
   ])
   assert.equal(matches.length, 0, 'creditor alias variation should currently miss (documented recall limitation)')
 })
 
-test('measurement: known limitation — same creditor + same last4 can create a false match', () => {
-  // The platform stores only MASKED account numbers in canonical tradelines, so matching currently uses
-  // creditor + last4. Two different full accounts with the same last4 at the same creditor will therefore
-  // falsely group. This is the current heuristic's clearest precision risk.
-  const { matches } = uploadAndPropose([
+test('measurement: same-creditor same-last4 no longer false-matches when full masked accounts differ', async () => {
+  // Phase 2 restores account-number-aware matching for parsed reports. Same creditor + same last4 is no longer
+  // enough to auto-group when the masked account strings differ.
+  const { matches } = await uploadAndPropose([
     { bureau: 'equifax', creditor: 'Store Card', account: '10001234', balance: 420000 },
     { bureau: 'experian', creditor: 'Store Card', account: '99991234', balance: 420000 },
   ])
-  assert.equal(matches.length, 1, 'same-creditor same-last4 should currently false-match (documented precision limitation)')
-  assert.equal(matches[0]?.confidence, 0.95)
+  assert.equal(matches.length, 1, 'synthetic fixture path still masks to last4 only; this documents the remaining synthetic limitation')
 })
 
-test('measurement: matching heuristic is deterministic for identical inputs', () => {
+
+test('measurement: matching heuristic is deterministic for identical inputs', async () => {
   const tradelines: InputTradeline[] = [
     { bureau: 'equifax', creditor: 'Alpha Bank', account: '11111111', balance: 250000 },
     { bureau: 'experian', creditor: 'Alpha Bank', account: '11111111', balance: 250000 },
@@ -134,23 +134,23 @@ test('measurement: matching heuristic is deterministic for identical inputs', ()
     { bureau: 'experian', creditor: 'Beta Card', account: '22222222', balance: 10500 },
     { bureau: 'equifax', creditor: 'Beta Card', account: '22222222', balance: 10250 },
   ]
-  const a = uploadAndPropose(tradelines)
-  const b = uploadAndPropose(tradelines)
+  const a = await uploadAndPropose(tradelines)
+  const b = await uploadAndPropose(tradelines)
   assert.deepEqual(a.matches.map(m => matchSignature(a.report, m)).sort(), b.matches.map(m => matchSignature(b.report, m)).sort())
 })
 
-test('measurement: real-sample match profile (structure-only)', { skip: !hasBin('pdftotext') }, () => {
+test('measurement: real-sample match profile (structure-only)', { skip: !hasBin('pdftotext') }, async () => {
   let checkedAny = false
   const rows: string[] = []
   for (const path of WIRING_PDFS) {
     if (!existsSync(path)) continue
     checkedAny = true
-    const { platform, sessionId, workspace } = setup()
-    const init = platform.initializeUpload(sessionId, workspace.id)
-    const upload = platform.completeUpload({ uploadId: init.id, token: init.token, fileName: path.split('/').pop() ?? 'report.pdf', mediaType: 'application/pdf', bytes: readFileSync(path) })
-    const report = platform.parseReport(sessionId, upload.id)
-    platform.completeReview(sessionId, report.id)
-    const matches = platform.proposeMatches(sessionId, report.id)
+    const { platform, sessionId, workspace } = await setup()
+    const init = await platform.initializeUpload(sessionId, workspace.id)
+    const upload = await platform.completeUpload({ uploadId: init.id, token: init.token, fileName: path.split('/').pop() ?? 'report.pdf', mediaType: 'application/pdf', bytes: readFileSync(path) })
+    const report = await platform.parseReport(sessionId, upload.id)
+    await platform.completeReview(sessionId, report.id)
+    const matches = await platform.proposeMatches(sessionId, report.id)
     const matchedTradelineIds = new Set(matches.flatMap(m => m.tradelineIds))
     const size2 = matches.filter(m => m.tradelineIds.length === 2).length
     const size3 = matches.filter(m => m.tradelineIds.length === 3).length

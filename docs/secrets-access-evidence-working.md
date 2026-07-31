@@ -5,15 +5,15 @@
 ## Secret locations
 | Secret / credential class | Storage location | Access restriction | Rotation owner | Notes |
 |---|---|---|---|---|
-| database credentials | `[TBD]` | `[TBD]` | `[TBD]` | |
-| signing keys | `[TBD]` | `[TBD]` | `[TBD]` | |
-| provider tokens | `[TBD]` | `[TBD]` | `[TBD]` | |
-| backup credentials | `[TBD]` | `[TBD]` | `[TBD]` | |
+| database credentials | Cloudflare D1 binding / Pages Functions env | Cloudflare account admin only | Security / Ops | Use the `PILOT_DB` binding; no raw credential is committed to git. |
+| signing keys | secret manager / future env binding | Security-only access | Security | Not enabled for the current pilot surface. |
+| provider tokens | secret manager / provider dashboard | Named owner only | Ops / Vendor | Only if a provider is added later. |
+| backup credentials | Cloudflare account / provider-managed | Account admin only | Ops | D1/R2 pilot uses provider-managed access; no shared credentials. |
 
 ## Privileged access controls
-- **Access review owner:** `[NAME / ROLE]`
-- **Review cadence:** `[MONTHLY / QUARTERLY]`
-- **MFA enforced on:** `[TBD systems]`
+- **Access review owner:** `Security / Ops`
+- **Review cadence:** `monthly`
+- **MFA enforced on:** `Cloudflare account admin, Pages project admin, D1 admin, R2 admin`
 - **Shared credentials allowed:** `no`
 
 ## Notes

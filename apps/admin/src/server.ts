@@ -3,17 +3,19 @@ import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createHealthStatus } from '../../../packages/domain/src/index.js'
 import { CreditAnalysisPlatform, type PilotApprovalRecordFile, type PilotDrillEvidenceReport, type PilotGate, type QualityReport } from '../../../packages/platform/src/index.js'
-import { loadPlatformRuntime, readRecentRuntimeEvents } from '../../web/src/runtime-store.js'
+import { readRecentRuntimeEvents, resolveRuntimeDbPath, SqlitePlatformStore, FileBlobStore } from '../../web/src/runtime-store.js'
+import { bootstrapGovernance } from '../../web/src/pilot-bootstrap.js'
 
 const port = Number(process.env.ADMIN_PORT ?? 3002)
 const runtimeDir = process.env.PILOT_PERSISTENCE_DIR ?? '.scratch/runtime/web'
 const approvalRecordPath = process.env.PILOT_APPROVAL_RECORD_PATH ?? 'docs/pilot-approval-records.json'
 const approvalRecords = JSON.parse(readFileSync(approvalRecordPath, 'utf8')) as PilotApprovalRecordFile
-const platform = new CreditAnalysisPlatform()
-if (!loadPlatformRuntime(platform, runtimeDir)) {
-  platform.hydrateLaunchScope(approvalRecords)
-  platform.loadPilotApprovals(approvalRecords)
-}
+// Same SQLite file the web server writes to, so quality/audit reporting here reflects real
+// consumer data rather than an empty in-memory store (docs/consumer-workflow-implementation-plan.md D5).
+const platform = new CreditAnalysisPlatform(new SqlitePlatformStore(resolveRuntimeDbPath(runtimeDir)), new FileBlobStore(runtimeDir))
+platform.hydrateLaunchScope(approvalRecords)
+platform.loadPilotApprovals(approvalRecords)
+bootstrapGovernance(platform, 'US-CA')
 
 const approvalAreas: PilotGate['approvals'][number]['area'][] = ['product', 'legal', 'privacy', 'security', 'operations', 'accessibility', 'vendor']
 
@@ -63,16 +65,16 @@ function runtimeEventItems(filter: string): string {
   return events.map((item: { kind: string; at: string; message?: string }) => `<li id="event-${item.kind}"><strong>${item.kind}</strong> <code>${item.at}</code> ${item.message ?? ''}</li>`).join('') || '<li id="event-none">none recorded</li>'
 }
 
-function evidenceSummary(): { gate: PilotGate; quality: QualityReport; drills: PilotDrillEvidenceReport } {
+async function evidenceSummary(): Promise<{ gate: PilotGate; quality: QualityReport; drills: PilotDrillEvidenceReport }> {
   return {
     gate: currentGate(),
-    quality: platform.getQualityReport(),
+    quality: await platform.getQualityReport(),
     drills: platform.getPilotDrillEvidenceReport(),
   }
 }
 
-function evidenceSection(): string {
-  const { gate, quality, drills } = evidenceSummary()
+async function evidenceSection(): Promise<string> {
+  const { gate, quality, drills } = await evidenceSummary()
   const topSegment = quality.segments[0]
   return `<section>
     <h2>Pilot evidence</h2>
@@ -86,7 +88,7 @@ function evidenceSection(): string {
   </section>`
 }
 
-function htmlPage(gateFilter = '', eventFilter = ''): string {
+async function htmlPage(gateFilter = '', eventFilter = ''): Promise<string> {
   const gate = currentGate()
   const packetNav = packetLinks.map(([label, href]) => `<li><a href="${href}">${label}</a></li>`).join('')
   const laneLinks = gate.approvals.map(item => `<a href="#approval-${item.area}">${item.area}</a>`).join(' · ') || 'none recorded'
@@ -124,7 +126,7 @@ function htmlPage(gateFilter = '', eventFilter = ''): string {
     </form>
   </section>
   <section><h2>Launch scope</h2><pre>${escapeHtml(JSON.stringify(gate.launchScope ?? null, null, 2))}</pre></section>
-  ${evidenceSection()}
+  ${await evidenceSection()}
   <section>
     <h2>Recorded approvals</h2>
     ${laneSectionList(gate, gateFilter)}
@@ -133,7 +135,7 @@ function htmlPage(gateFilter = '', eventFilter = ''): string {
   <section><h2>Recent runtime events</h2><ul>${runtimeEventItems(eventFilter)}</ul></section>`
 }
 
-const server = createServer((request, response) => {
+const server = createServer(async (request, response) => {
   const url = new URL(request.url ?? '/', `http://${request.headers.host ?? '127.0.0.1'}`)
   if (request.method === 'GET' && url.pathname === '/health') {
     response.writeHead(200, { 'content-type': 'application/json; charset=utf-8' })
@@ -142,7 +144,7 @@ const server = createServer((request, response) => {
   }
   if (request.method === 'GET' && url.pathname === '/pilot-evidence') {
     response.writeHead(200, { 'content-type': 'application/json; charset=utf-8' })
-    response.end(JSON.stringify(evidenceSummary()))
+    response.end(JSON.stringify(await evidenceSummary()))
     return
   }
   if (request.method === 'GET' && url.pathname === '/gate') {
@@ -152,7 +154,7 @@ const server = createServer((request, response) => {
   }
   if (request.method === 'GET' && url.pathname === '/') {
     response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
-    response.end(htmlPage(url.searchParams.get('lane') ?? '', url.searchParams.get('event') ?? ''))
+    response.end(await htmlPage(url.searchParams.get('lane') ?? '', url.searchParams.get('event') ?? ''))
     return
   }
   response.writeHead(404, { 'content-type': 'application/json; charset=utf-8' })

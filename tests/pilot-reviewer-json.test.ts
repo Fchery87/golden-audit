@@ -2,7 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { CreditAnalysisPlatform } from '../packages/platform/src/index.js'
 
-test('pilot reviewer JSON export: serializes bundle with stable reviewer fields', () => {
+test('pilot reviewer JSON export: serializes bundle with stable reviewer fields', async () => {
   const platform = new CreditAnalysisPlatform()
   platform.configureLaunchScope({
     mode: 'one-state-free-pilot',
@@ -25,7 +25,7 @@ test('pilot reviewer JSON export: serializes bundle with stable reviewer fields'
     followUpTicket: '.scratch/personal-credit-analysis-platform/issues/24-pilot-drill-evidence-reporting.md',
   })
 
-  const json = platform.renderPilotReviewerJson({
+  const json = await platform.renderPilotReviewerJson({
     comprehension: {
       passed: true,
       missing: [],
@@ -67,9 +67,9 @@ test('pilot reviewer JSON export: serializes bundle with stable reviewer fields'
   assert.match(parsed.markdown, /Failing evidence surfaces: accessibility, drills, narration/)
 })
 
-test('pilot reviewer JSON export: preserves incomplete-state summary when approvals are missing', () => {
+test('pilot reviewer JSON export: preserves incomplete-state summary when approvals are missing', async () => {
   const platform = new CreditAnalysisPlatform()
-  const json = platform.renderPilotReviewerJson({
+  const json = await platform.renderPilotReviewerJson({
     comprehension: {
       passed: false,
       missing: ['plainLanguageBoundary'],

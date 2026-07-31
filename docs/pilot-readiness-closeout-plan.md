@@ -18,6 +18,7 @@ Enough security evidence exists to support review of the pilot as a controlled C
 - Fill the GLBA/WISP draft with the required responsible individual and control ownership.
 - Inventory processors and record the required contractual/security obligations for each.
 - Confirm encryption in transit / at rest, MFA, least privilege, and incident-response expectations in writing.
+- Preserve the verified Cloudflare pilot deployment evidence (Pages alias URL, D1 id, R2 bucket, remote smoke pass) as references in the security packet set.
 
 ### Done when
 - Every high/critical risk has an owner and target date.
@@ -33,6 +34,7 @@ Core operational readiness evidence exists for observability, backup/restore, an
 - Document secrets storage and access restrictions.
 - Record backup target, restore steps, and last restore test result.
 - Exercise each critical runbook and capture the drill log.
+- Keep the deployed Pages verification commands and successful smoke output linked from the working ops evidence set.
 
 ### Done when
 - At least one restore test exists.
@@ -48,6 +50,7 @@ The privacy notice and processor disclosures are ready for accountable-owner rev
 - Confirm retention and deletion statements by category.
 - Confirm processor / sharing disclosures align with `docs/data-flow.md`.
 - Capture vendor DPA / deletion / incident notification status.
+- Convert the current Cloudflare working inventory into accountable-owner reviewed vendor evidence.
 
 ### Done when
 - The privacy packet can be reviewed against a coherent draft notice.
@@ -70,3 +73,11 @@ The approval lanes are ready to send and record.
 
 ## Open constraint
 Human approvals are still required; this plan only reduces the work needed to earn them.
+
+## Current verified implementation evidence
+- Cloudflare Pages alias URL: `https://main.golden-audit-pilot.pages.dev`
+- Verified preview deployment URL: `https://91794dbe.golden-audit-pilot.pages.dev`
+- D1 database: `golden-audit-pilot` (`e24d3d92-0f9d-4cf1-a31f-f47b733e3432`)
+- R2 bucket: `golden-audit-pilot-uploads`
+- Remote smoke passed on 2026-07-31 with overall `{"status":"ok"}`
+- Remote D1 migration `003_pilot_pages_state` applied and verified

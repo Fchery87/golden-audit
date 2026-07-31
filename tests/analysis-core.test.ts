@@ -59,6 +59,112 @@ test('analysis-core: disabled rules are skipped; unknown rules are skipped; dupl
   assert.ok(result.audit.some(a => a.reason === 'No supported evaluator for this rule'))
 })
 
+test('analysis-core: cross-bureau comparison requires distinct bureaus', () => {
+  const sameBureau: EvaluableTradeline[] = [
+    {
+      id: 'a',
+      bureau: 'equifax',
+      balance: { normalized: 100, confidence: 1, source: { kind: 'page', locator: 'a:balance', snippet: '$1.00' } },
+      status: { normalized: 'Open', confidence: 1, source: { kind: 'page', locator: 'a:status', snippet: 'Open' } },
+    },
+    {
+      id: 'b',
+      bureau: 'equifax',
+      balance: { normalized: 200, confidence: 1, source: { kind: 'page', locator: 'b:balance', snippet: '$2.00' } },
+      status: { normalized: 'Closed', confidence: 1, source: { kind: 'page', locator: 'b:status', snippet: 'Closed' } },
+    },
+  ]
+  const result = evaluateAnalysis({ rules: [rule()], tradelines: sameBureau, confirmedMatches: [{ tradelineIds: ['a', 'b'] }], versions })
+  assert.equal(result.findings.length, 0)
+  assert.equal(result.audit[0]?.outcome, 'skipped')
+  assert.match(result.audit[0]?.reason ?? '', /distinct bureaus/i)
+})
+
+test('analysis-core: partial furnishing produces a low-severity observed-fact', () => {
+  const partialRule: EvaluableRule = {
+    id: 'partial-1',
+    name: 'partial-furnishing-observation',
+    status: 'published',
+    minimumConfidence: 0.9,
+    classification: 'observed-fact',
+    limitations: ['Not every account is expected to appear on all three bureaus'],
+    authorityIds: ['auth-1'],
+    educationModuleIds: ['edu-1'],
+  }
+  const tradelines: EvaluableTradeline[] = [
+    { id: 'a', bureau: 'equifax', maskedAccount: { normalized: '••••1111', source: { kind: 'page', locator: 'a:account', snippet: '1111' } }, balance: { normalized: 100, confidence: 1, source: { kind: 'page', locator: 'a:balance', snippet: '$1.00' } } },
+    { id: 'b', bureau: 'experian', maskedAccount: { normalized: '••••1111', source: { kind: 'page', locator: 'b:account', snippet: '1111' } }, balance: { normalized: 100, confidence: 1, source: { kind: 'page', locator: 'b:balance', snippet: '$1.00' } } },
+  ]
+  const result = evaluateAnalysis({ rules: [partialRule], tradelines, confirmedMatches: [{ tradelineIds: ['a', 'b'] }], versions })
+  assert.equal(result.findings.length, 1)
+  assert.equal(result.findings[0]?.classification, 'observed-fact')
+  assert.equal(result.findings[0]?.severity, 'low')
+  assert.match(result.findings[0]?.title ?? '', /fewer than three bureaus/i)
+})
+
+test('analysis-core: slice-one money divergence and internal contradictions remain strict', () => {
+  const source = (field: string) => ({ kind: 'page' as const, locator: field, snippet: field })
+  const lines: EvaluableTradeline[] = [
+    {
+      id: 'eq', bureau: 'equifax',
+      accountType: { normalized: 'Revolving', confidence: 1, source: source('eq:type') },
+      balance: { normalized: 10000, confidence: 1, source: source('eq:balance') },
+      creditLimit: { normalized: 100000, confidence: 1, source: source('eq:limit') },
+      pastDue: { normalized: 12000, confidence: 1, source: source('eq:past-due') },
+      status: { normalized: 'Closed', confidence: 1, source: source('eq:status') },
+    },
+    {
+      id: 'ex', bureau: 'experian',
+      accountType: { normalized: 'Revolving', confidence: 1, source: source('ex:type') },
+      balance: { normalized: 10000, confidence: 1, source: source('ex:balance') },
+      creditLimit: { normalized: 125000, confidence: 1, source: source('ex:limit') },
+      pastDue: { normalized: 0, confidence: 1, source: source('ex:past-due') },
+      status: { normalized: 'Closed', confidence: 1, source: source('ex:status') },
+    },
+  ]
+  const rules: EvaluableRule[] = [
+    rule({ id: 'limit', name: 'cross-bureau-credit-limit-difference' }),
+    rule({ id: 'past-due', name: 'cross-bureau-past-due-difference' }),
+    rule({ id: 'closed-balance', name: 'closed-or-paid-with-balance' }),
+    rule({ id: 'past-due-balance', name: 'past-due-exceeds-balance' }),
+  ]
+  const result = evaluateAnalysis({ rules, tradelines: lines, confirmedMatches: [{ tradelineIds: ['eq', 'ex'] }], versions })
+  assert.deepEqual(result.findings.map(finding => finding.title).sort(), [
+    'Bureau credit limits differ',
+    'Bureau past-due amounts differ',
+    'Closed or paid account reports a balance',
+    'Closed or paid account reports a balance',
+    'Past-due amount exceeds reported balance',
+  ])
+  assert.equal(result.audit.filter(item => item.outcome === 'triggered').length, 5)
+})
+
+test('analysis-core: revolving account without limit is observed only when the type is known', () => {
+  const source = { kind: 'page' as const, locator: 'type', snippet: 'Revolving' }
+  const ruleForLimit: EvaluableRule = rule({
+    id: 'revolving',
+    name: 'revolving-without-credit-limit',
+    classification: 'observed-fact',
+  })
+  const withMissingLimit: EvaluableTradeline = {
+    id: 'a', bureau: 'equifax',
+    accountType: { normalized: 'Revolving', confidence: 1, source },
+    balance: { normalized: 100, confidence: 1, source },
+    creditLimit: { normalized: null, confidence: 0, source },
+  }
+  const withUnknownType: EvaluableTradeline = {
+    ...withMissingLimit,
+    id: 'b',
+    accountType: { normalized: null, confidence: 0, source },
+  }
+  const observed = evaluateAnalysis({ rules: [ruleForLimit], tradelines: [withMissingLimit], confirmedMatches: [{ tradelineIds: ['a'] }], versions })
+  assert.equal(observed.findings.length, 1)
+  assert.equal(observed.findings[0]?.classification, 'observed-fact')
+  const suppressed = evaluateAnalysis({ rules: [ruleForLimit], tradelines: [withUnknownType], confirmedMatches: [{ tradelineIds: ['b'] }], versions })
+  assert.equal(suppressed.findings.length, 0)
+  assert.equal(suppressed.audit[0]?.outcome, 'suppressed')
+})
+
 test('analysis-core: engine imports nothing from platform/domain (ingest-agnostic)', async () => {
   const files = ['taxonomy', 'evidence', 'findings', 'engine', 'index']
   for (const f of files) {

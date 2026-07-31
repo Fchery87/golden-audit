@@ -23,7 +23,7 @@ test('redaction: containsUnredactedIdentifier detects residual identifiers (stat
   assert.equal(containsUnredactedIdentifier('pin: 0000'), true)
 })
 
-test('trust boundary: an SSN injected into the upload cannot reach the parsed report, findings, or audit', () => {
+test('trust boundary: an SSN injected into the upload cannot reach the parsed report, findings, or audit', async () => {
   const platform = new CreditAnalysisPlatform()
   platform.configureLaunchScope({
     mode: 'one-state-free-pilot',
@@ -35,10 +35,11 @@ test('trust boundary: an SSN injected into the upload cannot reach the parsed re
     nationwideStatus: 'not-cleared',
     notes: 'Analysis-only, educational, consumer-uploaded, consumer-only boundary.',
   })
-  const { sessionId } = platform.register({ email: 'redact@example.com', password: 'correct horse battery staple' })
-  const workspace = platform.recordConsent(sessionId, consent)
-  platform.acceptAuthorization(sessionId)
-  const init = platform.initializeUpload(sessionId, workspace.id)
+  const inviteCode = await platform.issueInvite()
+  const { sessionId } = await platform.register({ email: 'redact@example.com', password: 'correct horse battery staple', inviteCode })
+  const workspace = await platform.recordConsent(sessionId, consent)
+  await platform.acceptAuthorization(sessionId)
+  const init = await platform.initializeUpload(sessionId, workspace.id)
   // identity intentionally contains a raw SSN; a tradeline balance differs so a finding is produced
   const payload = {
     provider: 'synthetic-provider', template: 'pilot-v1', reportDate: '2026-07-01',
@@ -49,13 +50,13 @@ test('trust boundary: an SSN injected into the upload cannot reach the parsed re
     ],
   }
   const bytes = Buffer.from(`<html>GOLDEN-AUDIT-REPORT:${JSON.stringify(payload)}</body></html>`)
-  const upload = platform.completeUpload({ uploadId: init.id, token: init.token, fileName: 'with-ssn.html', mediaType: 'text/html', bytes })
+  const upload = await platform.completeUpload({ uploadId: init.id, token: init.token, fileName: 'with-ssn.html', mediaType: 'text/html', bytes })
   assert.ok((upload.redactionCount ?? 0) > 0, 'redaction must run at the ingestion boundary')
 
-  const report = platform.parseReport(sessionId, upload.id)
-  platform.completeReview(sessionId, report.id)
-  const match = platform.proposeMatches(sessionId, report.id)[0]!
-  platform.decideMatch(sessionId, match.id, 'confirmed', 'same account')
+  const report = await platform.parseReport(sessionId, upload.id)
+  await platform.completeReview(sessionId, report.id)
+  const match = (await platform.proposeMatches(sessionId, report.id))[0]!
+  await platform.decideMatch(sessionId, match.id, 'confirmed', 'same account')
 
   // publish a ruleset so analysis can run (reuses governance path)
   platform.registerReviewer({ id: 'c', role: 'compliance-reviewer' })
@@ -69,8 +70,8 @@ test('trust boundary: an SSN injected into the upload cannot reach the parsed re
   platform.reviewGovernance('rule', rule.id, 'e', 'approved', 'ok')
   const ruleset = platform.publishRuleset('r', 'US-CA', '2026-07-01')
 
-  const analysis = platform.runAnalysis(sessionId, report.id, ruleset, 'US-CA')
-  const events = platform.getAuditEvents(sessionId)
+  const analysis = await platform.runAnalysis(sessionId, report.id, ruleset, 'US-CA')
+  const events = await platform.getAuditEvents(sessionId)
 
   // The raw SSN must not appear anywhere downstream of the trust boundary
   const rawSsn = '123-45-6789'

@@ -16,7 +16,7 @@ const reportInput = {
 }
 const markerBytes = () => Buffer.from(`<html>GOLDEN-AUDIT-REPORT:${JSON.stringify(reportInput)}</body></html>`)
 
-function onboard(platform: CreditAnalysisPlatform, email: string) {
+async function onboard(platform: CreditAnalysisPlatform, email: string) {
   platform.configureLaunchScope({
     mode: 'one-state-free-pilot',
     approvedStates: ['US-CA'],
@@ -27,14 +27,15 @@ function onboard(platform: CreditAnalysisPlatform, email: string) {
     nationwideStatus: 'not-cleared',
     notes: 'Analysis-only, educational, consumer-uploaded, consumer-only boundary.',
   })
-  const { sessionId } = platform.register({ email, password })
-  const workspace = platform.recordConsent(sessionId, consent)
-  platform.acceptAuthorization(sessionId)
+  const inviteCode = await platform.issueInvite()
+  const { sessionId } = await platform.register({ email, password, inviteCode })
+  const workspace = await platform.recordConsent(sessionId, consent)
+  await platform.acceptAuthorization(sessionId)
   return { sessionId, workspaceId: workspace.id }
 }
 
 // Q-L3 — Authorization: written authorization expressly accepted before any processing.
-test('Q-L3: processing is gated on written authorization (completeUpload throws until accepted)', () => {
+test('Q-L3: processing is gated on written authorization (completeUpload throws until accepted)', async () => {
   const platform = new CreditAnalysisPlatform()
   platform.configureLaunchScope({
     mode: 'one-state-free-pilot',
@@ -46,17 +47,18 @@ test('Q-L3: processing is gated on written authorization (completeUpload throws 
     nationwideStatus: 'not-cleared',
     notes: 'Analysis-only, educational, consumer-uploaded, consumer-only boundary.',
   })
-  const { sessionId } = platform.register({ email: 'auth@example.com', password })
-  const workspace = platform.recordConsent(sessionId, consent)
-  const init = platform.initializeUpload(sessionId, workspace.id)
-  assert.throws(() => platform.completeUpload({ uploadId: init.id, token: init.token, fileName: 'r.html', mediaType: 'text/html', bytes: markerBytes() }), /Written authorization required/)
-  const auth = platform.acceptAuthorization(sessionId)
+  const inviteCode = await platform.issueInvite()
+  const { sessionId } = await platform.register({ email: 'auth@example.com', password, inviteCode })
+  const workspace = await platform.recordConsent(sessionId, consent)
+  const init = await platform.initializeUpload(sessionId, workspace.id)
+  await assert.rejects(() => platform.completeUpload({ uploadId: init.id, token: init.token, fileName: 'r.html', mediaType: 'text/html', bytes: markerBytes() }), /Written authorization required/)
+  const auth = await platform.acceptAuthorization(sessionId)
   assert.equal(auth.version, AUTHORIZATION_VERSION); assert.ok(auth.acceptedAt)
-  const completed = platform.completeUpload({ uploadId: init.id, token: init.token, fileName: 'r.html', mediaType: 'text/html', bytes: markerBytes() })
+  const completed = await platform.completeUpload({ uploadId: init.id, token: init.token, fileName: 'r.html', mediaType: 'text/html', bytes: markerBytes() })
   assert.equal(completed.stage, 'ready-to-parse')
-  const retained = platform.getAuthorization(sessionId)
+  const retained = await platform.getAuthorization(sessionId)
   assert.equal(retained.version, AUTHORIZATION_VERSION); assert.equal(retained.acceptedAt, auth.acceptedAt)
-  assert.ok(platform.getAuditEvents(sessionId).some(e => e.type === 'authorization-accepted'))
+  assert.ok((await platform.getAuditEvents(sessionId)).some(e => e.type === 'authorization-accepted'))
 })
 
 
@@ -76,16 +78,16 @@ test('Q-L1: no third-party delivery, eligibility, or comparative-ranking API pat
   for (const expected of ['acceptAuthorization', 'createExport', 'createConsumerReport', 'parseReport', 'requestDeletion']) assert.ok(names.includes(expected), `expected subject-facing method missing: ${expected}`)
 })
 
-test('Q-L1: a second authenticated consumer cannot read another subject report (subject-only delivery)', () => {
+test('Q-L1: a second authenticated consumer cannot read another subject report (subject-only delivery)', async () => {
   const platform = new CreditAnalysisPlatform()
-  const a = onboard(platform, 'subject@example.com')
-  const b = onboard(platform, 'other@example.com')
-  const init = platform.initializeUpload(a.sessionId, a.workspaceId)
-  const completed = platform.completeUpload({ uploadId: init.id, token: init.token, fileName: 'r.html', mediaType: 'text/html', bytes: markerBytes() })
-  const report = platform.parseReport(a.sessionId, completed.id)
-  assert.throws(() => platform.parseReport(b.sessionId, completed.id), /Not found/)
+  const a = await onboard(platform, 'subject@example.com')
+  const b = await onboard(platform, 'other@example.com')
+  const init = await platform.initializeUpload(a.sessionId, a.workspaceId)
+  const completed = await platform.completeUpload({ uploadId: init.id, token: init.token, fileName: 'r.html', mediaType: 'text/html', bytes: markerBytes() })
+  const report = await platform.parseReport(a.sessionId, completed.id)
+  await assert.rejects(() => platform.parseReport(b.sessionId, completed.id), /Not found/)
   const firstTradeline = report.tradelines[0]; assert.ok(firstTradeline)
-  assert.throws(() => platform.getSourceSnippet(b.sessionId, report.id, firstTradeline.creditor.id), /Not found/)
+  await assert.rejects(() => platform.getSourceSnippet(b.sessionId, report.id, firstTradeline.creditor.id), /Not found/)
 })
 
 // Pricing — genuinely free pilot: no payment/billing/subscription path.

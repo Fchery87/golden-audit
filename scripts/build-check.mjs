@@ -5,7 +5,10 @@ const required = [
   'apps/web/functions/api/health.ts',
   'apps/web/functions/api/onboarding.ts',
   'apps/web/functions/api/_platform.ts',
+  'apps/web/functions/api/store-d1.ts',
   'apps/web/functions/api/consumer/[[path]].ts',
+  'apps/web/src/runtime-store.ts',
+  'apps/web/src/pilot-bootstrap.ts',
   'apps/web/src/pilot-state.ts',
   'functions/api/health.ts',
   'functions/api/onboarding.ts',
@@ -18,6 +21,7 @@ const required = [
   'database/migrations/001_foundation.sql',
   'database/migrations/002_product_platform.sql',
   'database/migrations/003_pilot_pages_state.sql',
+  'database/migrations/004_consumer_persistence.sql',
   'wrangler.jsonc',
 ]
 await Promise.all(required.map(path => access(path)))

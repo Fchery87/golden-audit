@@ -2,7 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { CreditAnalysisPlatform } from '../packages/platform/src/index.js'
 
-test('pilot evidence bundle: composes quality, drill, comprehension, accessibility, and narration evidence', () => {
+test('pilot evidence bundle: composes quality, drill, comprehension, accessibility, and narration evidence', async () => {
   const platform = new CreditAnalysisPlatform()
   platform.configureLaunchScope({
     mode: 'one-state-free-pilot',
@@ -25,7 +25,7 @@ test('pilot evidence bundle: composes quality, drill, comprehension, accessibili
     followUpTicket: '.scratch/personal-credit-analysis-platform/issues/24-pilot-drill-evidence-reporting.md',
   })
 
-  const bundle = platform.getPilotEvidenceBundle({
+  const bundle = await platform.getPilotEvidenceBundle({
     comprehension: {
       passed: true,
       missing: [],
@@ -60,10 +60,10 @@ test('pilot evidence bundle: composes quality, drill, comprehension, accessibili
   assert.deepEqual(bundle.summary.failingEvidenceSurfaces, ['accessibility', 'drills', 'narration'])
 })
 
-test('pilot evidence bundle: reports incomplete approvals and only failing supplied surfaces', () => {
+test('pilot evidence bundle: reports incomplete approvals and only failing supplied surfaces', async () => {
   const platform = new CreditAnalysisPlatform()
 
-  const bundle = platform.getPilotEvidenceBundle({
+  const bundle = await platform.getPilotEvidenceBundle({
     comprehension: {
       passed: false,
       missing: ['plainLanguageBoundary'],

@@ -3,7 +3,7 @@ import { join } from 'node:path'
 
 const databaseDirectory = join(process.cwd(), 'database', 'local')
 const statePath = join(databaseDirectory, 'schema-migrations.json')
-const migrationVersions = ['001_foundation', '002_product_platform']
+const migrationVersions = ['001_foundation', '002_product_platform', '003_pilot_pages_state', '004_consumer_persistence']
 
 await mkdir(databaseDirectory, { recursive: true })
 let applied: string[] = []

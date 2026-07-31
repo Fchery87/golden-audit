@@ -10,30 +10,27 @@ import {
   type MatchGroup,
 } from '../../../packages/platform/src/index.js'
 import { buildPilotAvailabilityPayload, buildPilotOnboardingPayload } from './pilot-state.js'
-import { appendRuntimeEvent, loadPlatformRuntime, savePlatformRuntime } from './runtime-store.js'
+import { bootstrapGovernance } from './pilot-bootstrap.js'
+import { appendRuntimeEvent, resolveRuntimeDbPath, SqlitePlatformStore, FileBlobStore } from './runtime-store.js'
 
 const port = Number(process.env.WEB_PORT ?? 3000)
 const runtimeDir = process.env.PILOT_PERSISTENCE_DIR ?? '.scratch/runtime/web'
-const platform = new CreditAnalysisPlatform()
+const platform = new CreditAnalysisPlatform(new SqlitePlatformStore(resolveRuntimeDbPath(runtimeDir)), new FileBlobStore(runtimeDir))
 const approvalRecordPath = process.env.PILOT_APPROVAL_RECORD_PATH ?? 'docs/pilot-approval-records.json'
 const approvalRecords = JSON.parse(readFileSync(approvalRecordPath, 'utf8')) as PilotApprovalRecordFile
 const fixtureOnly = approvalRecords.scope === 'test-fixture-only' || /fixture/i.test(approvalRecords.status) || /not approvals?/i.test(approvalRecords._warning ?? '')
-let hydratedLaunchScope: LaunchScope | undefined
-const runtimeLoaded = loadPlatformRuntime(platform, runtimeDir)
-if (runtimeLoaded) {
-  hydratedLaunchScope = platform.getLaunchScope()
-} else {
-  hydratedLaunchScope = platform.hydrateLaunchScope(approvalRecords)
-  platform.loadPilotApprovals(approvalRecords)
-  bootstrapPublishedRulesets(platform)
-  persistPlatform()
-  hydratedLaunchScope = platform.getLaunchScope()
-}
+
+// Launch scope and governance/rulesets are operator config, re-seeded fresh at every process
+// start (docs/consumer-workflow-implementation-plan.md D5) — unlike user/upload/report/etc.
+// data, they are never persisted across restarts, so this always runs regardless of whether
+// runtime.sqlite already has consumer data in it from a prior run.
+platform.hydrateLaunchScope(approvalRecords)
+platform.loadPilotApprovals(approvalRecords)
+bootstrapGovernance(platform, 'US-CA')
 const launchScope = platform.getLaunchScope()
 const launchScopeAvailabilityClaim = fixtureOnly
   ? 'Pilot currently limited to approved pilot states only.'
   : launchScope.availabilityClaim
-const publishedRulesetByJurisdiction = getPublishedRulesetByJurisdiction(platform)
 
 const clientDistPath = existsSync(join(process.cwd(), 'apps/web/client/dist'))
   ? join(process.cwd(), 'apps/web/client/dist')
@@ -77,8 +74,8 @@ function serveClientIndex(response: ServerResponse): void {
 }
 
 type JsonRecord = Record<string, unknown>
-type ConsumerSessionHeader = { sessionId: string }
-type ConsumerRegisterBody = { email: string; password: string }
+type ConsumerRegisterBody = { email: string; password: string; inviteCode: string }
+type ConsumerSignInBody = { email: string; password: string }
 type ConsumerConsentBody = {
   version: string
   adultUSConsumer: true
@@ -93,6 +90,10 @@ type UploadCompleteBody = { uploadId: string; token: string; fileName: string; m
 type AnalysisKickoffBody = { jurisdiction?: string; autoConfirmSimpleMatches?: boolean }
 type MatchDecisionBody = { action: 'confirmed' | 'rejected' | 'split' | 'merged'; reason: string }
 type MatchSubgroupBody = { tradelineIds: string[]; reason: string }
+type CompleteAnalysisBody = { jurisdiction?: string }
+type PasswordResetRequestBody = { email: string }
+type PasswordResetConfirmBody = { token: string; newPassword: string }
+type VerifyEmailBody = { token: string }
 
 type TradelineSummary = { id: string; bureau: string; creditor: string; maskedAccount: string; balanceCents: number | null }
 
@@ -106,86 +107,32 @@ type ConsumerFlowSummary = {
   exportId?: string
 }
 
-type CompleteAnalysisBody = { jurisdiction?: string }
-
-function persistPlatform(): void {
-  try {
-    savePlatformRuntime(platform, runtimeDir)
-  } catch (error) {
-    recordRuntimeEvent(createRuntimeEvent({
-      kind: 'persistence-failure',
-      at: new Date().toISOString(),
-      message: error instanceof Error ? error.message : 'Unexpected persistence failure',
-    }))
-    throw error
-  }
-}
-
 function recordRuntimeEvent(event: RuntimeEvent): void {
-  appendRuntimeEvent(runtimeDir, event)
-}
-
-function bootstrapPublishedRulesets(app: CreditAnalysisPlatform): Partial<Record<Jurisdiction, string>> {
-  app.registerReviewer({ id: 'web-compliance-reviewer', role: 'compliance-reviewer' })
-  app.registerReviewer({ id: 'web-engineering-reviewer', role: 'engineering-reviewer' })
-  app.registerReviewer({ id: 'web-release-manager', role: 'release-manager' })
-
-  const authority = app.createAuthority('web-compliance-reviewer', {
-    citation: '15 USC 1681',
-    jurisdiction: 'US-CA',
-    effectiveFrom: '2020-01-01',
-    permittedUse: 'education',
-    limitations: ['A consumer report alone may not establish a legal violation'],
-  })
-  const module = app.createEducationModule('web-compliance-reviewer', {
-    title: 'Balance timing',
-    body: 'Bureaus can update on different dates.',
-    jurisdiction: 'US-CA',
-    effectiveFrom: '2020-01-01',
-    permittedUse: 'education',
-    limitations: ['Verify current information directly'],
-  })
-  app.reviewGovernance('authority', authority.id, 'web-compliance-reviewer', 'approved', 'Prototype consumer flow seed content')
-  app.reviewGovernance('module', module.id, 'web-compliance-reviewer', 'approved', 'Prototype consumer flow seed content')
-  const rule = app.createRule('web-engineering-reviewer', {
-    name: 'cross-bureau-balance-difference',
-    jurisdiction: 'US-CA',
-    effectiveFrom: '2020-01-01',
-    requiredInputs: ['balance', 'updated'],
-    minimumConfidence: 0.9,
-    classification: 'verification-recommended',
-    limitations: ['Different update dates can explain a difference'],
-    authorityIds: [authority.id],
-    educationModuleIds: [module.id],
-    testCases: ['web-consumer-flow'],
-  })
-  app.reviewGovernance('rule', rule.id, 'web-engineering-reviewer', 'approved', 'Prototype consumer flow seed content')
-
-  return {
-    'US-CA': app.publishRuleset('web-release-manager', 'US-CA', '2026-07-01'),
+  try {
+    appendRuntimeEvent(runtimeDir, event)
+  } catch {
+    // Runtime-event logging is best-effort diagnostics, not the consumer data path (D5) — a
+    // failure here must never surface as a request failure.
   }
 }
 
-function getPublishedRulesetByJurisdiction(app: CreditAnalysisPlatform): Partial<Record<Jurisdiction, string>> {
-  const published = app.exportSnapshot().publishedRulesets
-  const californiaRuleset = published.find(([, rules]) => rules.some(rule => rule.jurisdiction === 'US-CA'))
-  if (!californiaRuleset) throw new Error('No published ruleset is available for US-CA')
-  return { 'US-CA': californiaRuleset[0] }
-}
+const SESSION_COOKIE = 'golden_audit_session'
+const SESSION_COOKIE_MAX_AGE_SECONDS = 30 * 24 * 60 * 60
 
-function respondJson(response: ServerResponse, statusCode: number, body: unknown): void {
-  response.writeHead(statusCode, { 'content-type': 'application/json; charset=utf-8' })
-  response.end(JSON.stringify(body))
-}
-
-function normalizeState(value: string): Jurisdiction {
-  return (value.startsWith('US-') ? value : `US-${value}`) as Jurisdiction
-}
-
+/** D10: sessions travel as an httpOnly cookie, never a JS-readable header/localStorage bearer token. */
 function getSessionId(request: IncomingMessage): string {
-  const value = request.headers['x-session-id']
-  if (!value || Array.isArray(value) || !value.trim()) throw new Error('x-session-id header is required')
-  return value
+  const header = request.headers.cookie ?? ''
+  for (const part of header.split(';')) {
+    const [name, ...rest] = part.trim().split('=')
+    if (name === SESSION_COOKIE) return decodeURIComponent(rest.join('='))
+  }
+  throw new Error('Authentication required')
+}
+function sessionCookieHeader(sessionId: string, maxAgeSeconds: number): string {
+  return `${SESSION_COOKIE}=${encodeURIComponent(sessionId)}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${maxAgeSeconds}`
+}
+function clearSessionCookieHeader(): string {
+  return `${SESSION_COOKIE}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0`
 }
 
 async function readJsonBody(request: IncomingMessage): Promise<JsonRecord> {
@@ -204,36 +151,34 @@ async function readJsonBody(request: IncomingMessage): Promise<JsonRecord> {
   return parsed as JsonRecord
 }
 
+function respondJson(response: ServerResponse, statusCode: number, body: unknown, extraHeaders: Record<string, string> = {}): void {
+  response.writeHead(statusCode, { 'content-type': 'application/json; charset=utf-8', ...extraHeaders })
+  response.end(JSON.stringify(body))
+}
+
+function normalizeState(value: string): Jurisdiction {
+  return (value.startsWith('US-') ? value : `US-${value}`) as Jurisdiction
+}
+
 function onboardingPayload(scope: LaunchScope | undefined): JsonRecord {
   return buildPilotOnboardingPayload(scope, launchScopeAvailabilityClaim, fixtureOnly)
 }
 
 function resolveRulesetForJurisdiction(jurisdiction: Jurisdiction): string {
-  const ruleset = publishedRulesetByJurisdiction[jurisdiction]
-  if (!ruleset) throw new Error(`No published ruleset is available for ${jurisdiction}`)
-  return ruleset
+  const version = platform.getPublishedRulesetVersionFor(jurisdiction)
+  if (!version) throw new Error(`No published ruleset is available for ${jurisdiction}`)
+  return version
 }
 
-function maybeAutoConfirmSimpleMatches(sessionId: string, matches: MatchGroup[]): MatchGroup[] {
-  const confirmed: MatchGroup[] = []
-  for (const match of matches) {
-    if (match.tradelineIds.length <= 3) {
-      confirmed.push(platform.decideMatch(sessionId, match.id, 'confirmed', 'Auto-confirmed simple pilot match'))
-    }
-  }
-  return confirmed
-}
-
-function kickoffAnalysisFlow(sessionId: string, uploadId: string, body: AnalysisKickoffBody): ConsumerFlowSummary {
+async function kickoffAnalysisFlow(sessionId: string, uploadId: string, body: AnalysisKickoffBody): Promise<ConsumerFlowSummary> {
   const jurisdiction = normalizeState(body.jurisdiction ?? launchScope?.provisionalSelectedState ?? 'US-CA')
-  const report = platform.parseReport(sessionId, uploadId)
-  platform.completeReview(sessionId, report.id)
-  const matches = platform.proposeMatches(sessionId, report.id)
-  const confirmedById = new Map<string, MatchGroup>()
-  if (body.autoConfirmSimpleMatches) {
-    for (const confirmed of maybeAutoConfirmSimpleMatches(sessionId, matches)) confirmedById.set(confirmed.id, confirmed)
+  const report = await platform.parseReport(sessionId, uploadId)
+  await platform.completeReview(sessionId, report.id)
+  const matches = await platform.proposeMatches(sessionId, report.id)
+  const updatedMatches: MatchGroup[] = []
+  for (const match of matches) {
+    updatedMatches.push(body.autoConfirmSimpleMatches && match.tradelineIds.length <= 3 ? await platform.decideMatch(sessionId, match.id, 'confirmed', 'Auto-confirmed simple pilot match') : match)
   }
-  const updatedMatches = matches.map(match => confirmedById.get(match.id) ?? match)
   const unresolved = updatedMatches.filter(match => match.state !== 'confirmed' && match.state !== 'rejected')
   if (unresolved.length > 0) {
     const tradelines: TradelineSummary[] = report.tradelines.map(line => ({
@@ -245,14 +190,14 @@ function kickoffAnalysisFlow(sessionId: string, uploadId: string, body: Analysis
     }))
     return { status: 'match-review-required', reportId: report.id, matches: updatedMatches, tradelines }
   }
-  const completed = completeAnalysisForReport(sessionId, report.id, jurisdiction)
+  const completed = await completeAnalysisForReport(sessionId, report.id, jurisdiction)
   return { status: 'analysis-complete', reportId: report.id, matches: updatedMatches, ...completed }
 }
 
-function completeAnalysisForReport(sessionId: string, reportId: string, jurisdiction: Jurisdiction): { analysisId: string; consumerReportId: string; exportId: string } {
-  const analysis = platform.runAnalysis(sessionId, reportId, resolveRulesetForJurisdiction(jurisdiction), jurisdiction)
-  const consumerReport = platform.createConsumerReport(sessionId, analysis.id)
-  const exportArtifact = platform.createExport(sessionId, consumerReport.id)
+async function completeAnalysisForReport(sessionId: string, reportId: string, jurisdiction: Jurisdiction): Promise<{ analysisId: string; consumerReportId: string; exportId: string }> {
+  const analysis = await platform.runAnalysis(sessionId, reportId, resolveRulesetForJurisdiction(jurisdiction), jurisdiction)
+  const consumerReport = await platform.createConsumerReport(sessionId, analysis.id)
+  const exportArtifact = await platform.createExport(sessionId, consumerReport.id)
   return { analysisId: analysis.id, consumerReportId: consumerReport.id, exportId: exportArtifact.id }
 }
 
@@ -260,23 +205,32 @@ async function handleCompleteAnalysis(request: IncomingMessage, response: Server
   const sessionId = getSessionId(request)
   const body = await readJsonBody(request) as CompleteAnalysisBody
   const jurisdiction = normalizeState(body.jurisdiction ?? launchScope?.provisionalSelectedState ?? 'US-CA')
-  const completed = completeAnalysisForReport(sessionId, reportId, jurisdiction)
-  persistPlatform()
+  const completed = await completeAnalysisForReport(sessionId, reportId, jurisdiction)
   respondJson(response, 201, { status: 'analysis-complete', reportId, ...completed })
 }
 
 async function handleRegister(request: IncomingMessage, response: ServerResponse): Promise<void> {
   const body = await readJsonBody(request) as ConsumerRegisterBody
-  const account = platform.register({ email: body.email, password: body.password })
-  persistPlatform()
+  const account = await platform.register({ email: body.email, password: body.password, inviteCode: body.inviteCode })
   recordRuntimeEvent(createRuntimeEvent({ kind: 'pilot-transition', at: new Date().toISOString(), transition: 'register', message: `registered ${account.userId}` }))
-  respondJson(response, 201, { sessionId: account.sessionId, userId: account.userId, launchScope: launchScope ?? null, onboarding: onboardingPayload(launchScope) })
+  respondJson(response, 201, { userId: account.userId, launchScope: launchScope ?? null, onboarding: onboardingPayload(launchScope) }, { 'set-cookie': sessionCookieHeader(account.sessionId, SESSION_COOKIE_MAX_AGE_SECONDS) })
+}
+
+async function handleSignIn(request: IncomingMessage, response: ServerResponse): Promise<void> {
+  const body = await readJsonBody(request) as ConsumerSignInBody
+  const sessionId = await platform.signIn({ email: body.email, password: body.password })
+  respondJson(response, 200, { status: 'signed-in' }, { 'set-cookie': sessionCookieHeader(sessionId, SESSION_COOKIE_MAX_AGE_SECONDS) })
+}
+
+async function handleSignOut(request: IncomingMessage, response: ServerResponse): Promise<void> {
+  try { await platform.signOut(getSessionId(request)) } catch { /* already signed out / no cookie — clearing it is still correct */ }
+  respondJson(response, 200, { status: 'signed-out' }, { 'set-cookie': clearSessionCookieHeader() })
 }
 
 async function handleConsent(request: IncomingMessage, response: ServerResponse): Promise<void> {
   const sessionId = getSessionId(request)
   const body = await readJsonBody(request) as ConsumerConsentBody
-  const workspace = platform.recordConsent(sessionId, {
+  const workspace = await platform.recordConsent(sessionId, {
     version: body.version,
     adultUSConsumer: body.adultUSConsumer,
     authorizedReportUse: body.authorizedReportUse,
@@ -290,20 +244,20 @@ async function handleConsent(request: IncomingMessage, response: ServerResponse)
 
 async function handleAuthorization(request: IncomingMessage, response: ServerResponse): Promise<void> {
   const sessionId = getSessionId(request)
-  const authorization = platform.acceptAuthorization(sessionId)
+  const authorization = await platform.acceptAuthorization(sessionId)
   respondJson(response, 201, authorization)
 }
 
 async function handleUploadInit(request: IncomingMessage, response: ServerResponse): Promise<void> {
   const sessionId = getSessionId(request)
   const body = await readJsonBody(request) as UploadInitBody
-  const upload = platform.initializeUpload(sessionId, body.workspaceId)
+  const upload = await platform.initializeUpload(sessionId, body.workspaceId)
   respondJson(response, 201, upload)
 }
 
 async function handleUploadComplete(request: IncomingMessage, response: ServerResponse): Promise<void> {
   const body = await readJsonBody(request) as UploadCompleteBody
-  const upload = platform.completeUpload({
+  const upload = await platform.completeUpload({
     uploadId: body.uploadId,
     token: body.token,
     fileName: body.fileName,
@@ -317,7 +271,7 @@ async function handleUploadComplete(request: IncomingMessage, response: ServerRe
 async function handleKickoffAnalysis(request: IncomingMessage, response: ServerResponse, uploadId: string): Promise<void> {
   const sessionId = getSessionId(request)
   const body = await readJsonBody(request) as AnalysisKickoffBody
-  const result = kickoffAnalysisFlow(sessionId, uploadId, body)
+  const result = await kickoffAnalysisFlow(sessionId, uploadId, body)
   if (result.status === 'analysis-complete') {
     recordRuntimeEvent(createRuntimeEvent({ kind: 'analysis-complete', at: new Date().toISOString(), reportId: result.reportId, uploadId, message: 'analysis completed successfully' }))
   } else {
@@ -329,32 +283,63 @@ async function handleKickoffAnalysis(request: IncomingMessage, response: ServerR
 async function handleMatchDecision(request: IncomingMessage, response: ServerResponse, matchId: string): Promise<void> {
   const sessionId = getSessionId(request)
   const body = await readJsonBody(request) as MatchDecisionBody
-  const match = platform.decideMatch(sessionId, matchId, body.action, body.reason)
-  persistPlatform()
+  const match = await platform.decideMatch(sessionId, matchId, body.action, body.reason)
   respondJson(response, 200, match)
 }
 
 async function handleMatchSubgroup(request: IncomingMessage, response: ServerResponse, matchId: string): Promise<void> {
   const sessionId = getSessionId(request)
   const body = await readJsonBody(request) as MatchSubgroupBody
-  const match = platform.confirmMatchSubgroup(sessionId, matchId, body.tradelineIds, body.reason)
-  persistPlatform()
+  const match = await platform.confirmMatchSubgroup(sessionId, matchId, body.tradelineIds, body.reason)
   respondJson(response, 201, match)
 }
 
 async function handleGetAnalysis(request: IncomingMessage, response: ServerResponse, analysisId: string): Promise<void> {
   const sessionId = getSessionId(request)
-  respondJson(response, 200, platform.getAnalysis(sessionId, analysisId))
+  respondJson(response, 200, await platform.getAnalysis(sessionId, analysisId))
 }
 
 async function handleGetConsumerReport(request: IncomingMessage, response: ServerResponse, consumerReportId: string): Promise<void> {
   const sessionId = getSessionId(request)
-  respondJson(response, 200, platform.getConsumerReport(sessionId, consumerReportId))
+  respondJson(response, 200, await platform.getConsumerReport(sessionId, consumerReportId))
 }
 
 async function handleGetExport(request: IncomingMessage, response: ServerResponse, exportId: string): Promise<void> {
   const sessionId = getSessionId(request)
-  respondJson(response, 200, platform.getExport(sessionId, exportId))
+  respondJson(response, 200, await platform.getExport(sessionId, exportId))
+}
+
+/** D5: the consumer's written-in deletion promise (AUTHORIZATION_TEXT) was previously
+ *  unenforceable — requestDeletion existed but no route ever called it. */
+async function handleDeletion(request: IncomingMessage, response: ServerResponse): Promise<void> {
+  const sessionId = getSessionId(request)
+  const job = await platform.requestDeletion(sessionId)
+  respondJson(response, 201, job)
+}
+
+async function handlePasswordResetRequest(request: IncomingMessage, response: ServerResponse): Promise<void> {
+  const body = await readJsonBody(request) as PasswordResetRequestBody
+  const result = await platform.requestPasswordReset(body.email)
+  // Deliberately identical response whether or not the email exists (no account-enumeration signal).
+  // No transactional email vendor is wired yet (D10 rationale) — logged only for pilot debugging.
+  if (result) console.log(`[password-reset] token issued for user ${result.userId} (no email vendor configured — token not delivered)`)
+  respondJson(response, 200, { status: 'if-account-exists-reset-issued' })
+}
+async function handlePasswordResetConfirm(request: IncomingMessage, response: ServerResponse): Promise<void> {
+  const body = await readJsonBody(request) as PasswordResetConfirmBody
+  await platform.resetPassword(body.token, body.newPassword)
+  respondJson(response, 200, { status: 'password-reset' }, { 'set-cookie': clearSessionCookieHeader() })
+}
+async function handleEmailVerificationRequest(request: IncomingMessage, response: ServerResponse): Promise<void> {
+  const sessionId = getSessionId(request)
+  const result = await platform.requestEmailVerification(sessionId)
+  console.log(`[email-verify] token issued (no email vendor configured — token not delivered): ${result.token}`)
+  respondJson(response, 200, { status: 'verification-issued' })
+}
+async function handleVerifyEmail(request: IncomingMessage, response: ServerResponse): Promise<void> {
+  const body = await readJsonBody(request) as VerifyEmailBody
+  await platform.verifyEmail(body.token)
+  respondJson(response, 200, { status: 'email-verified' })
 }
 
 const server = createServer(async (request, response) => {
@@ -378,8 +363,6 @@ const server = createServer(async (request, response) => {
 
       const state = url.searchParams.get('state')?.trim().toUpperCase()
       const normalizedState = state ? normalizeState(state) : undefined
-      const approvedStates = launchScope.approvedStates
-      const eligible = normalizedState ? approvedStates.includes(normalizedState) : false
       respondJson(response, 200, buildPilotAvailabilityPayload(launchScope, fixtureOnly, normalizedState))
       return
     }
@@ -402,73 +385,39 @@ const server = createServer(async (request, response) => {
       return
     }
 
-    if (request.method === 'POST' && url.pathname === '/consumer/register') {
-      await handleRegister(request, response)
-      return
-    }
-
-    if (request.method === 'POST' && url.pathname === '/consumer/consent') {
-      await handleConsent(request, response)
-      return
-    }
-
-    if (request.method === 'POST' && url.pathname === '/consumer/authorization') {
-      await handleAuthorization(request, response)
-      return
-    }
-
-    if (request.method === 'POST' && url.pathname === '/consumer/uploads/init') {
-      await handleUploadInit(request, response)
-      return
-    }
-
-    if (request.method === 'POST' && url.pathname === '/consumer/uploads/complete') {
-      await handleUploadComplete(request, response)
-      return
-    }
+    if (request.method === 'POST' && url.pathname === '/consumer/register') return await handleRegister(request, response)
+    if (request.method === 'POST' && url.pathname === '/consumer/sign-in') return await handleSignIn(request, response)
+    if (request.method === 'POST' && url.pathname === '/consumer/sign-out') return await handleSignOut(request, response)
+    if (request.method === 'POST' && url.pathname === '/consumer/password-reset/request') return await handlePasswordResetRequest(request, response)
+    if (request.method === 'POST' && url.pathname === '/consumer/password-reset/confirm') return await handlePasswordResetConfirm(request, response)
+    if (request.method === 'POST' && url.pathname === '/consumer/email-verification/request') return await handleEmailVerificationRequest(request, response)
+    if (request.method === 'POST' && url.pathname === '/consumer/email-verification/confirm') return await handleVerifyEmail(request, response)
+    if (request.method === 'POST' && url.pathname === '/consumer/consent') return await handleConsent(request, response)
+    if (request.method === 'POST' && url.pathname === '/consumer/authorization') return await handleAuthorization(request, response)
+    if (request.method === 'POST' && url.pathname === '/consumer/uploads/init') return await handleUploadInit(request, response)
+    if (request.method === 'POST' && url.pathname === '/consumer/uploads/complete') return await handleUploadComplete(request, response)
+    if (request.method === 'POST' && url.pathname === '/consumer/deletion') return await handleDeletion(request, response)
 
     const kickoffMatch = request.method === 'POST' ? url.pathname.match(/^\/consumer\/uploads\/([^/]+)\/kickoff-analysis$/) : null
-    if (kickoffMatch) {
-      await handleKickoffAnalysis(request, response, kickoffMatch[1] ?? '')
-      persistPlatform()
-      return
-    }
+    if (kickoffMatch) return await handleKickoffAnalysis(request, response, kickoffMatch[1] ?? '')
 
     const subgroupMatch = request.method === 'POST' ? url.pathname.match(/^\/consumer\/matches\/([^/]+)\/confirm-subgroup$/) : null
-    if (subgroupMatch) {
-      await handleMatchSubgroup(request, response, subgroupMatch[1] ?? '')
-      return
-    }
+    if (subgroupMatch) return await handleMatchSubgroup(request, response, subgroupMatch[1] ?? '')
 
     const completeAnalysisMatch = request.method === 'POST' ? url.pathname.match(/^\/consumer\/reports\/([^/]+)\/complete-analysis$/) : null
-    if (completeAnalysisMatch) {
-      await handleCompleteAnalysis(request, response, completeAnalysisMatch[1] ?? '')
-      return
-    }
+    if (completeAnalysisMatch) return await handleCompleteAnalysis(request, response, completeAnalysisMatch[1] ?? '')
 
     const decisionMatch = request.method === 'POST' ? url.pathname.match(/^\/consumer\/matches\/([^/]+)\/decision$/) : null
-    if (decisionMatch) {
-      await handleMatchDecision(request, response, decisionMatch[1] ?? '')
-      return
-    }
+    if (decisionMatch) return await handleMatchDecision(request, response, decisionMatch[1] ?? '')
 
     const analysisMatch = request.method === 'GET' ? url.pathname.match(/^\/consumer\/analyses\/([^/]+)$/) : null
-    if (analysisMatch) {
-      await handleGetAnalysis(request, response, analysisMatch[1] ?? '')
-      return
-    }
+    if (analysisMatch) return await handleGetAnalysis(request, response, analysisMatch[1] ?? '')
 
     const consumerReportMatch = request.method === 'GET' ? url.pathname.match(/^\/consumer\/reports\/([^/]+)$/) : null
-    if (consumerReportMatch) {
-      await handleGetConsumerReport(request, response, consumerReportMatch[1] ?? '')
-      return
-    }
+    if (consumerReportMatch) return await handleGetConsumerReport(request, response, consumerReportMatch[1] ?? '')
 
     const exportMatch = request.method === 'GET' ? url.pathname.match(/^\/consumer\/exports\/([^/]+)$/) : null
-    if (exportMatch) {
-      await handleGetExport(request, response, exportMatch[1] ?? '')
-      return
-    }
+    if (exportMatch) return await handleGetExport(request, response, exportMatch[1] ?? '')
 
     if (request.method === 'GET' && extname(url.pathname)) {
       serveStaticAsset(response, url.pathname.slice(1))
@@ -478,7 +427,7 @@ const server = createServer(async (request, response) => {
     respondJson(response, 404, { error: 'Not found' })
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unexpected error'
-    recordRuntimeEvent(createRuntimeEvent({ kind: 'release-gate-failure', at: new Date().toISOString(), gate: `${request.method ?? 'UNKNOWN'} ${(request.url ?? '/')}` , message }))
+    recordRuntimeEvent(createRuntimeEvent({ kind: 'release-gate-failure', at: new Date().toISOString(), gate: `${request.method ?? 'UNKNOWN'} ${(request.url ?? '/')}`, message }))
     respondJson(response, 400, { error: message })
   }
 })

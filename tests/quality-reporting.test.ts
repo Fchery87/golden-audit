@@ -5,7 +5,7 @@ import { CreditAnalysisPlatform, type Bureau } from '../packages/platform/src/in
 const password = 'correct horse battery staple'
 const consent = { version: '2026-01', adultUSConsumer: true, authorizedReportUse: true, educationalLimitations: true, sensitiveDataHandling: true, residence: 'US-CA', analysisJurisdiction: 'US-CA' } as const
 
-function setup(email: string, analysisJurisdiction: 'US-CA' | 'US-NY' = 'US-CA') {
+async function setup(email: string, analysisJurisdiction: 'US-CA' | 'US-NY' = 'US-CA') {
   const platform = new CreditAnalysisPlatform()
   platform.configureLaunchScope({
     mode: 'small-reviewed-state-subset',
@@ -16,9 +16,10 @@ function setup(email: string, analysisJurisdiction: 'US-CA' | 'US-NY' = 'US-CA')
     nationwideStatus: 'state-by-state-review',
     notes: 'Analysis-only, educational, consumer-uploaded, consumer-only boundary.',
   })
-  const account = platform.register({ email, password })
-  const workspace = platform.recordConsent(account.sessionId, { ...consent, residence: analysisJurisdiction, analysisJurisdiction })
-  platform.acceptAuthorization(account.sessionId)
+  const inviteCode = await platform.issueInvite()
+  const account = await platform.register({ email, password, inviteCode })
+  const workspace = await platform.recordConsent(account.sessionId, { ...consent, residence: analysisJurisdiction, analysisJurisdiction })
+  await platform.acceptAuthorization(account.sessionId)
   return { platform, ...account, workspace }
 }
 
@@ -35,8 +36,8 @@ function publishFixtureRules(platform: CreditAnalysisPlatform) {
   return platform.publishRuleset('release-1', 'US-CA', '2026-07-01')
 }
 
-function runSyntheticAnalysis(platform: CreditAnalysisPlatform, sessionId: string, workspaceId: string, input: { provider: string; template: string; jurisdiction?: 'US-CA' | 'US-NY'; tradelines: Array<{ bureau: Bureau; creditor: string; account: string; balance: number; updated: string }> }) {
-  const initialized = platform.initializeUpload(sessionId, workspaceId)
+async function runSyntheticAnalysis(platform: CreditAnalysisPlatform, sessionId: string, workspaceId: string, input: { provider: string; template: string; jurisdiction?: 'US-CA' | 'US-NY'; tradelines: Array<{ bureau: Bureau; creditor: string; account: string; balance: number; updated: string }> }) {
+  const initialized = await platform.initializeUpload(sessionId, workspaceId)
   const bytes = Buffer.from(`<html>GOLDEN-AUDIT-REPORT:${JSON.stringify({
     provider: input.provider,
     template: input.template,
@@ -59,18 +60,18 @@ function runSyntheticAnalysis(platform: CreditAnalysisPlatform, sessionId: strin
       updated: line.updated,
     })),
   })}</body></html>`)
-  const upload = platform.completeUpload({ uploadId: initialized.id, token: initialized.token, fileName: 'report.html', mediaType: 'text/html', bytes })
-  const report = platform.parseReport(sessionId, upload.id)
-  platform.completeReview(sessionId, report.id)
-  const proposed = platform.proposeMatches(sessionId, report.id)
-  for (const match of proposed) platform.decideMatch(sessionId, match.id, 'confirmed', 'quality measurement fixture')
-  const analysis = platform.runAnalysis(sessionId, report.id, publishFixtureRules(platform), input.jurisdiction ?? 'US-CA')
+  const upload = await platform.completeUpload({ uploadId: initialized.id, token: initialized.token, fileName: 'report.html', mediaType: 'text/html', bytes })
+  const report = await platform.parseReport(sessionId, upload.id)
+  await platform.completeReview(sessionId, report.id)
+  const proposed = await platform.proposeMatches(sessionId, report.id)
+  for (const match of proposed) await platform.decideMatch(sessionId, match.id, 'confirmed', 'quality measurement fixture')
+  const analysis = await platform.runAnalysis(sessionId, report.id, publishFixtureRules(platform), input.jurisdiction ?? 'US-CA')
   return { upload, report, proposed, analysis }
 }
 
-test('quality reporting: segments metrics by provider, document type, and jurisdiction with latency summaries', () => {
-  const { platform, sessionId, workspace } = setup('quality-a@example.com', 'US-CA')
-  runSyntheticAnalysis(platform, sessionId, workspace.id, {
+test('quality reporting: segments metrics by provider, document type, and jurisdiction with latency summaries', async () => {
+  const { platform, sessionId, workspace } = await setup('quality-a@example.com', 'US-CA')
+  await runSyntheticAnalysis(platform, sessionId, workspace.id, {
     provider: 'synthetic-provider',
     template: 'pilot-v1',
     tradelines: [
@@ -78,7 +79,7 @@ test('quality reporting: segments metrics by provider, document type, and jurisd
       { bureau: 'experian', creditor: 'Example Bank', account: '12345678', balance: 15000, updated: '2026-06-28' },
     ],
   })
-  runSyntheticAnalysis(platform, sessionId, workspace.id, {
+  await runSyntheticAnalysis(platform, sessionId, workspace.id, {
     provider: 'synthetic-provider',
     template: 'pilot-v2',
     tradelines: [
@@ -87,7 +88,7 @@ test('quality reporting: segments metrics by provider, document type, and jurisd
     ],
   })
 
-  const report = platform.getQualityReport()
+  const report = await platform.getQualityReport()
   assert.equal(report.segments.length, 1)
   const segment = report.segments[0]!
   assert.equal(segment.provider, 'synthetic-provider')
@@ -110,9 +111,9 @@ test('quality reporting: segments metrics by provider, document type, and jurisd
   assert.ok(segment.latency.parseToAnalysis.averageMs >= 0)
 })
 
-test('quality reporting: keeps segments separate by jurisdiction and includes empty-finding analyses', () => {
-  const first = setup('quality-b@example.com', 'US-CA')
-  runSyntheticAnalysis(first.platform, first.sessionId, first.workspace.id, {
+test('quality reporting: keeps segments separate by jurisdiction and includes empty-finding analyses', async () => {
+  const first = await setup('quality-b@example.com', 'US-CA')
+  await runSyntheticAnalysis(first.platform, first.sessionId, first.workspace.id, {
     provider: 'synthetic-provider',
     template: 'pilot-v1',
     tradelines: [
@@ -121,8 +122,8 @@ test('quality reporting: keeps segments separate by jurisdiction and includes em
     ],
   })
 
-  const second = setup('quality-c@example.com', 'US-NY')
-  runSyntheticAnalysis(second.platform, second.sessionId, second.workspace.id, {
+  const second = await setup('quality-c@example.com', 'US-NY')
+  await runSyntheticAnalysis(second.platform, second.sessionId, second.workspace.id, {
     provider: 'synthetic-provider',
     template: 'pilot-v1',
     jurisdiction: 'US-NY',
@@ -132,11 +133,11 @@ test('quality reporting: keeps segments separate by jurisdiction and includes em
     ],
   })
 
-  const caSegment = first.platform.getQualityReport().segments[0]!
+  const caSegment = (await first.platform.getQualityReport()).segments[0]!
   assert.equal(caSegment.jurisdiction, 'US-CA')
   assert.equal(caSegment.findings.total, 1)
 
-  const nySegment = second.platform.getQualityReport().segments[0]!
+  const nySegment = (await second.platform.getQualityReport()).segments[0]!
   assert.equal(nySegment.jurisdiction, 'US-NY')
   assert.equal(nySegment.analyses, 1)
   assert.equal(nySegment.findings.total, 0)

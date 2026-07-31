@@ -41,7 +41,7 @@ function binOf(magCents: number): string {
   return '>$1k'                              // likely material
 }
 
-test('measurement: real-sample finding magnitude distribution (structure-only)', { skip: !hasBin }, () => {
+test('measurement: real-sample finding magnitude distribution (structure-only)', { skip: !hasBin }, async () => {
   let totalFindings = 0; let checkedAny = false; const rows: string[] = []
   for (const path of PDFS) {
     if (!existsSync(path)) continue
@@ -57,17 +57,18 @@ test('measurement: real-sample finding magnitude distribution (structure-only)',
       nationwideStatus: 'not-cleared',
       notes: 'Analysis-only, educational, consumer-uploaded, consumer-only boundary.',
     })
-    const { sessionId } = p.register({ email: 'measure@example.com', password })
-    const ws = p.recordConsent(sessionId, consent); p.acceptAuthorization(sessionId)
-    const init = p.initializeUpload(sessionId, ws.id)
-    const up = p.completeUpload({ uploadId: init.id, token: init.token, fileName: path.split('/').pop() ?? 'r.pdf', mediaType: 'application/pdf', bytes: readFileSync(path) })
-    const report = p.parseReport(sessionId, up.id)
-    p.completeReview(sessionId, report.id)
-    const proposed = p.proposeMatches(sessionId, report.id)
+    const inviteCode = await p.issueInvite()
+    const { sessionId } = await p.register({ email: 'measure@example.com', password, inviteCode })
+    const ws = await p.recordConsent(sessionId, consent); await p.acceptAuthorization(sessionId)
+    const init = await p.initializeUpload(sessionId, ws.id)
+    const up = await p.completeUpload({ uploadId: init.id, token: init.token, fileName: path.split('/').pop() ?? 'r.pdf', mediaType: 'application/pdf', bytes: readFileSync(path) })
+    const report = await p.parseReport(sessionId, up.id)
+    await p.completeReview(sessionId, report.id)
+    const proposed = await p.proposeMatches(sessionId, report.id)
     const confirmable = proposed.filter(mt => mt.tradelineIds.length <= 3)
     const withheldCollisionSets = proposed.length - confirmable.length
-    for (const mt of confirmable) p.decideMatch(sessionId, mt.id, 'confirmed', 'measurement')
-    const analysis = p.runAnalysis(sessionId, report.id, publishRules(p), 'US-CA')
+    for (const mt of confirmable) await p.decideMatch(sessionId, mt.id, 'confirmed', 'measurement')
+    const analysis = await p.runAnalysis(sessionId, report.id, publishRules(p), 'US-CA')
 
     const bins: Record<string, number> = { '<$10': 0, '$10-100': 0, '$100-1k': 0, '>$1k': 0 }
     let downRanked = 0

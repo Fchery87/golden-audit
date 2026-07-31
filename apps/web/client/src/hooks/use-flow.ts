@@ -1,5 +1,5 @@
 import * as React from 'react'
-import { api, setSession, type KickoffResult } from '@/lib/api'
+import { api, type KickoffResult } from '@/lib/api'
 import { SAMPLE_REPORT, encodeReportForUpload } from '@/lib/sample-report'
 
 export type StepKey =
@@ -11,7 +11,9 @@ export type StepKey =
   | 'kickoff'
 
 export type FlowSnapshot = {
-  sessionId: string | null
+  // D10: the session itself lives in an httpOnly cookie the browser manages — this just tracks
+  // whether registration succeeded, for the wizard's own step-done display.
+  userId: string | null
   workspaceId: string | null
   authorizationVersion: string | null
   uploadId: string | null
@@ -23,7 +25,7 @@ export type FlowSnapshot = {
 const STORAGE_KEY = 'golden-audit-flow'
 
 const EMPTY: FlowSnapshot = {
-  sessionId: null,
+  userId: null,
   workspaceId: null,
   authorizationVersion: null,
   uploadId: null,
@@ -55,7 +57,7 @@ function load(): FlowSnapshot {
 export function stepDone(key: StepKey, s: FlowSnapshot): boolean {
   switch (key) {
     case 'register':
-      return !!s.sessionId
+      return !!s.userId
     case 'consent':
       return !!s.workspaceId
     case 'authorization':
@@ -72,6 +74,7 @@ export function stepDone(key: StepKey, s: FlowSnapshot): boolean {
 type FormState = {
   email: string
   password: string
+  inviteCode: string
   reportJson: string
 }
 
@@ -81,9 +84,8 @@ type FormState = {
 async function advance(key: StepKey, s: FlowSnapshot, form: FormState): Promise<FlowSnapshot> {
   switch (key) {
     case 'register': {
-      const res = await api.register(form.email, form.password)
-      setSession(res.sessionId)
-      return { ...EMPTY, sessionId: res.sessionId }
+      const res = await api.register(form.email, form.password, form.inviteCode)
+      return { ...EMPTY, userId: res.userId }
     }
     case 'consent': {
       const res = await api.consent()
@@ -127,6 +129,7 @@ export function useFlow() {
   const [form, setForm] = React.useState<FormState>({
     email: 'pilot@example.com',
     password: 'correct horse battery staple',
+    inviteCode: '',
     reportJson: JSON.stringify(SAMPLE_REPORT, null, 2),
   })
   const [busy, setBusy] = React.useState<StepKey | null>(null)
@@ -137,7 +140,6 @@ export function useFlow() {
   snapRef.current = snap
 
   React.useEffect(() => {
-    setSession(snap.sessionId)
     if (typeof window !== 'undefined') window.localStorage.setItem(STORAGE_KEY, JSON.stringify(snap))
   }, [snap])
 
@@ -172,9 +174,12 @@ export function useFlow() {
     }
   }
 
-  function reset(): void {
+  async function reset(): Promise<void> {
+    // Actually revoke the server-side session and clear the cookie — clearing only local wizard
+    // state would leave the user authenticated (D10: the cookie, not this snapshot, is the
+    // real session boundary now).
+    try { await api.signOut() } catch { /* no active session to revoke — fine */ }
     setSnap(EMPTY)
-    setSession(null)
     if (typeof window !== 'undefined') window.localStorage.removeItem(STORAGE_KEY)
     setError(null)
   }

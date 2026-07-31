@@ -2,7 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { CreditAnalysisPlatform } from '../packages/platform/src/index.js'
 
-test('pilot reviewer markdown export: renders bundle status, approvals, evidence surfaces, and drill follow-ups', () => {
+test('pilot reviewer markdown export: renders bundle status, approvals, evidence surfaces, and drill follow-ups', async () => {
   const platform = new CreditAnalysisPlatform()
   platform.configureLaunchScope({
     mode: 'one-state-free-pilot',
@@ -25,7 +25,7 @@ test('pilot reviewer markdown export: renders bundle status, approvals, evidence
     followUpTicket: '.scratch/personal-credit-analysis-platform/issues/24-pilot-drill-evidence-reporting.md',
   })
 
-  const markdown = platform.renderPilotReviewerMarkdown({
+  const markdown = await platform.renderPilotReviewerMarkdown({
     comprehension: {
       passed: true,
       missing: [],
@@ -63,9 +63,9 @@ test('pilot reviewer markdown export: renders bundle status, approvals, evidence
   assert.match(markdown, /- Deletion failure — blocked — owner: security-owner — follow-up: \.scratch\/personal-credit-analysis-platform\/issues\/24-pilot-drill-evidence-reporting.md/)
 })
 
-test('pilot reviewer markdown export: renders missing approvals and no drill follow-ups when clean', () => {
+test('pilot reviewer markdown export: renders missing approvals and no drill follow-ups when clean', async () => {
   const platform = new CreditAnalysisPlatform()
-  const markdown = platform.renderPilotReviewerMarkdown({
+  const markdown = await platform.renderPilotReviewerMarkdown({
     comprehension: {
       passed: false,
       missing: ['plainLanguageBoundary'],

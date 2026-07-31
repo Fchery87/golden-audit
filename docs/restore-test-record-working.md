@@ -3,14 +3,14 @@
 > **Status:** Working record for the current California one-state pilot. This is not approval and not production certification. No restore test has been executed yet; this file exists to capture the first accountable test.
 
 ## Restore test
-- **Date:** `[TBD]`
-- **Owner:** `[NAME / ROLE]`
-- **Backup target:** `[SYSTEM / LOCATION]`
+- **Date:** `2026-07-31`
+- **Owner:** `Ops / Security`
+- **Backup target:** `Cloudflare D1 + R2`
 - **Restore objective:** Restore the pilot runtime state and confirm the expected scope can be recovered without widening access.
-- **Result:** `not yet executed`
-- **Evidence reference:** `[LOG / SCREENSHOT / TICKET / DOC]`
-- **Gaps found:** `[TBD after execution]`
-- **Follow-up ticket:** `[TBD]`
+- **Result:** `pending first restore drill`
+- **Evidence reference:** `docs/ops-runbook.md` / `docs/deployment-checklist.md`
+- **Gaps found:** `not yet exercised`
+- **Follow-up ticket:** `TBD`
 
 ## Preconditions to execute
 - backup target chosen

@@ -18,6 +18,16 @@
          "bucket_name": "golden-audit-pilot-uploads"
        }
      ],
+     // D10: rate limiting on auth endpoints (register/sign-in/password-reset), keyed by client
+     // IP in the route handler. Native Workers binding — zero provisioning, config-only, no
+     // `wrangler ratelimit create` step. See docs/consumer-workflow-implementation-plan.md D10.
+     "ratelimits": [
+       {
+         "name": "AUTH_RATE_LIMITER",
+         "namespace_id": "1001",
+         "simple": { "limit": 5, "period": 60 }
+       }
+     ],
      "vars": {
        "PILOT_APPROVAL_RECORD_PATH": "docs/pilot-approval-records.json",
        "PILOT_SCOPE": "california-one-state-pilot"

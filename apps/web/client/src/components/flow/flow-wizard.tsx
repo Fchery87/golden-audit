@@ -17,7 +17,7 @@ const STEPS: StepMeta[] = [
     key: 'register',
     title: 'Register a session',
     action: 'Register',
-    detail: (s) => (s.sessionId ? `session …${s.sessionId.slice(-8)}` : null),
+    detail: (s) => (s.userId ? `user …${s.userId.slice(-8)}` : null),
   },
   {
     key: 'consent',
@@ -144,6 +144,15 @@ function FormPanel({
             value={form.password}
             disabled={disabled}
             onChange={(e) => setForm({ ...form, password: e.target.value })}
+          />
+        </Label>
+        <Label className="sm:col-span-2">
+          <span className="eyebrow">Invite code</span>
+          <Input
+            value={form.inviteCode}
+            disabled={disabled}
+            placeholder="Minted out of band — see `npm run issue-invite`"
+            onChange={(e) => setForm({ ...form, inviteCode: e.target.value })}
           />
         </Label>
       </div>

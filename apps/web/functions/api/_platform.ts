@@ -1,13 +1,16 @@
-import type { D1Database, PagesFunction, R2Bucket } from '@cloudflare/workers-types'
-import { CreditAnalysisPlatform, type LaunchScope, type PilotApprovalRecordFile, type PlatformSnapshot } from '../../../../packages/platform/src/index.js'
+import type { D1Database, R2Bucket, RateLimit } from '@cloudflare/workers-types'
+import { CreditAnalysisPlatform, type LaunchScope, type PilotApprovalRecordFile, type BlobStore, type Id } from '../../../../packages/platform/src/index.js'
 import { buildPilotAvailabilityPayload, buildPilotOnboardingPayload } from '../../src/pilot-state.js'
+import { bootstrapGovernance } from '../../src/pilot-bootstrap.js'
+import { D1PlatformStore } from './store-d1.js'
 
 export interface PilotPagesEnv {
   PILOT_DB: D1Database
   PILOT_UPLOADS: R2Bucket
+  /** D10: register/sign-in/password-reset rate limiting, keyed by client IP. */
+  AUTH_RATE_LIMITER: RateLimit
 }
 
-const SNAPSHOT_KEY = 'platform-snapshot'
 const UPLOAD_PREFIX = 'uploads/'
 
 const seedLaunchScope: LaunchScope = {
@@ -38,89 +41,43 @@ const seedApprovalRecord: PilotApprovalRecordFile = {
   approvals: [],
 }
 
-async function readSnapshot(env: PilotPagesEnv): Promise<PlatformSnapshot | null> {
-  const row = await env.PILOT_DB.prepare('SELECT value FROM pilot_state WHERE key = ?').bind(SNAPSHOT_KEY).first<{ value: string }>()
-  if (!row?.value) return null
-  return JSON.parse(row.value) as PlatformSnapshot
-}
-
-async function writeSnapshot(env: PilotPagesEnv, snapshot: PlatformSnapshot): Promise<void> {
-  await env.PILOT_DB.prepare(
-    'INSERT INTO pilot_state (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at',
-  ).bind(SNAPSHOT_KEY, JSON.stringify(snapshot), new Date().toISOString()).run()
-}
-
-async function ensureSchema(env: PilotPagesEnv): Promise<void> {
-  await env.PILOT_DB.exec(`
-    CREATE TABLE IF NOT EXISTS pilot_state (
-      key TEXT PRIMARY KEY,
-      value TEXT NOT NULL,
-      updated_at TEXT NOT NULL
-    )
-  `)
-}
-
-async function loadPlatform(env: PilotPagesEnv): Promise<CreditAnalysisPlatform> {
-  await ensureSchema(env)
-  const platform = new CreditAnalysisPlatform()
-  const snapshot = await readSnapshot(env)
-  if (snapshot) {
-    platform.importSnapshot(snapshot)
-    return platform
+/** Raw upload bytes live in R2 only — never in D1 (docs/consumer-workflow-implementation-plan.md D5). */
+class R2BlobStore implements BlobStore {
+  constructor(private bucket: R2Bucket) {}
+  async get(id: Id): Promise<Uint8Array | undefined> {
+    const object = await this.bucket.get(`${UPLOAD_PREFIX}${id}`)
+    if (!object) return undefined
+    return new Uint8Array(await object.arrayBuffer())
   }
-  const launchScope: LaunchScope = seedLaunchScope
+  async put(id: Id, bytes: Uint8Array): Promise<void> {
+    await this.bucket.put(`${UPLOAD_PREFIX}${id}`, bytes)
+  }
+  async delete(id: Id): Promise<void> {
+    await this.bucket.delete(`${UPLOAD_PREFIX}${id}`)
+  }
+}
+
+/**
+ * Each call builds a fresh CreditAnalysisPlatform bound to this request's D1/R2 bindings.
+ * There is no whole-platform snapshot to load/save any more (D5): every entity method reads
+ * and writes directly through the injected store, so "loading" a platform is just constructing
+ * it plus re-seeding the in-memory operator config (launch scope + governance/rulesets) that
+ * doesn't live in the store at all — see packages/platform/src/store.ts's doc comment for why.
+ */
+export function loadPilotPlatform(env: PilotPagesEnv): CreditAnalysisPlatform {
+  const platform = new CreditAnalysisPlatform(new D1PlatformStore(env.PILOT_DB), new R2BlobStore(env.PILOT_UPLOADS))
   platform.configureLaunchScope({
-    mode: launchScope.mode,
-    approvedStates: launchScope.approvedStates,
-    ...(launchScope.provisionalSelectedState ? { provisionalSelectedState: launchScope.provisionalSelectedState } : {}),
-    stateSelectionEvidenceReference: launchScope.stateSelectionEvidenceReference,
-    availabilityClaim: launchScope.availabilityClaim,
-    pricingMode: launchScope.pricingMode,
-    nationwideStatus: launchScope.nationwideStatus,
-    notes: launchScope.notes,
+    mode: seedLaunchScope.mode,
+    approvedStates: seedLaunchScope.approvedStates,
+    ...(seedLaunchScope.provisionalSelectedState ? { provisionalSelectedState: seedLaunchScope.provisionalSelectedState } : {}),
+    stateSelectionEvidenceReference: seedLaunchScope.stateSelectionEvidenceReference,
+    availabilityClaim: seedLaunchScope.availabilityClaim,
+    pricingMode: seedLaunchScope.pricingMode,
+    nationwideStatus: seedLaunchScope.nationwideStatus,
+    notes: seedLaunchScope.notes,
   })
+  bootstrapGovernance(platform, 'US-CA')
   return platform
-}
-
-async function persistPlatform(env: PilotPagesEnv, platform: CreditAnalysisPlatform): Promise<void> {
-  await ensureSchema(env)
-  await writeSnapshot(env, platform.exportSnapshot())
-}
-
-async function storeUploadBlob(env: PilotPagesEnv, uploadId: string, mediaType: string, fileName: string, content: Uint8Array): Promise<void> {
-  await env.PILOT_UPLOADS.put(`${UPLOAD_PREFIX}${uploadId}`, content, {
-    httpMetadata: { contentType: mediaType },
-    customMetadata: { fileName },
-  })
-}
-
-async function loadUploadBlob(env: PilotPagesEnv, uploadId: string): Promise<Uint8Array | null> {
-  const object = await env.PILOT_UPLOADS.get(`${UPLOAD_PREFIX}${uploadId}`)
-  if (!object) return null
-  return new Uint8Array(await object.arrayBuffer())
-}
-
-export async function withPlatform<T>(env: PilotPagesEnv, mutate: (platform: CreditAnalysisPlatform) => Promise<T> | T): Promise<T> {
-  const platform = await loadPlatform(env)
-  const result = await mutate(platform)
-  await persistPlatform(env, platform)
-  return result
-}
-
-export async function loadPilotPlatform(env: PilotPagesEnv): Promise<CreditAnalysisPlatform> {
-  return loadPlatform(env)
-}
-
-export async function persistPilotPlatform(env: PilotPagesEnv, platform: CreditAnalysisPlatform): Promise<void> {
-  return persistPlatform(env, platform)
-}
-
-export async function persistUpload(env: PilotPagesEnv, uploadId: string, mediaType: string, fileName: string, content: Uint8Array): Promise<void> {
-  await storeUploadBlob(env, uploadId, mediaType, fileName, content)
-}
-
-export async function fetchUploadContent(env: PilotPagesEnv, uploadId: string): Promise<Uint8Array | null> {
-  return loadUploadBlob(env, uploadId)
 }
 
 export { buildPilotAvailabilityPayload, buildPilotOnboardingPayload, seedApprovalRecord }
