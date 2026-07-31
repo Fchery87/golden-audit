@@ -1,5 +1,4 @@
 import type { PagesFunction } from '@cloudflare/workers-types'
-import { Response } from '@cloudflare/workers-types'
 
 export type LaunchScopePayload = {
   approvedStates: string[]
@@ -16,7 +15,7 @@ const defaultPayload: LaunchScopePayload = {
 }
 
 export const onRequestGet: PagesFunction = () => {
-  return new Response(JSON.stringify({
+  return new globalThis.Response(JSON.stringify({
     service: 'pages-functions',
     onboarding: {
       stepTitle: 'Pilot availability',
@@ -34,5 +33,5 @@ export const onRequestGet: PagesFunction = () => {
   }), {
     status: 200,
     headers: { 'content-type': 'application/json; charset=utf-8' },
-  })
+  }) as any
 }

@@ -1,5 +1,4 @@
 import type { PagesFunction } from '@cloudflare/workers-types'
-import { Response } from '@cloudflare/workers-types'
 import { createRuntimeEvent } from '../../../../../packages/domain/src/index.js'
 import { type Jurisdiction, type MatchGroup } from '../../../../../packages/platform/src/index.js'
 import { persistPilotPlatform, persistUpload, loadPilotPlatform, type PilotPagesEnv } from '../_platform.js'
@@ -24,8 +23,8 @@ type MatchDecisionBody = { action: 'confirmed' | 'rejected' | 'split' | 'merged'
 type MatchSubgroupBody = { tradelineIds: string[]; reason: string }
 type CompleteAnalysisBody = { jurisdiction?: string }
 
-function respondJson(body: unknown, status = 200): Response {
-  return new Response(JSON.stringify(body), {
+function respondJson(body: unknown, status = 200): any {
+  return new globalThis.Response(JSON.stringify(body), {
     status,
     headers: { 'content-type': 'application/json; charset=utf-8' },
   })
@@ -212,5 +211,5 @@ export const onRequest: PagesFunction<PilotPagesEnv> = async context => {
     return respondJson({ service: 'consumer', status: 'ok' })
   }
 
-  return respondJson({ error: 'Not found' }, 404)
+  return respondJson({ error: 'Not found' }, 404) as any
 }
