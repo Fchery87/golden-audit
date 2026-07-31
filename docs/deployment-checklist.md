@@ -1,6 +1,8 @@
 # Deployment and Release Checklist
 
 ## Before release
+- Review the Cloudflare setup walkthrough in `docs/cloudflare-pages-d1-r2-setup.md` before creating the real Pages, D1, and R2 resources.
+- Use `docs/cloudflare-rollout-checklist.md` as the condensed execution checklist during the actual rollout.
 - Confirm the runtime store exists and is writable for the local Node path.
 - Confirm the web boundary starts and returns onboarding payloads.
 - Confirm the client build succeeds.

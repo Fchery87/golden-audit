@@ -49,5 +49,6 @@
 - whether optional narration stays disabled
 
 ## Notes
+- Review the operational setup walkthrough in `docs/cloudflare-pages-d1-r2-setup.md` before creating the real Cloudflare resources.
 - This plan does not imply approval.
 - It only chooses the provisional pilot stack and order of implementation work.

@@ -30,5 +30,6 @@
 - data residency review where applicable
 
 ## Notes
+- Review `docs/cloudflare-pages-d1-r2-setup.md` before replacing the placeholder Cloudflare resource values in this working inventory.
 - Replace every `[TBD ...]` row with the actual provider once deployment choices are made.
 - Do not treat this as vendor approval; it is only the working inventory needed before vendor review can sign off.
