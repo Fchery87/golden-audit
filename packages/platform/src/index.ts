@@ -231,7 +231,16 @@ export class CreditAnalysisPlatform {
     const user = await this.store.getUserById(userId); if (!user) throw new Error('Not found')
     const workspaces = await this.store.listWorkspacesForUser(userId)
     const reports = await this.store.listConsumerReportsForUser(userId)
-    return { email: user.email, workspaceId: workspaces[0]?.id ?? null, consent: !!user.consent, authorization: !!(await this.store.getAuthorizationByUser(userId)), reports: await Promise.all(reports.map(async report => ({ id: report.id, generatedAt: report.generatedAt, findingCount: report.findings.length, parserVersion: report.content?.parserVersion ?? 'legacy', exportId: (await this.store.findExportByReport(userId, report.id))?.id ?? null }))) }
+    const pending = (await this.store.listReportsForUser(userId)).reverse()
+    const pendingReview = await (async () => {
+      for (const candidate of pending) {
+        const matches = await this.store.listMatchesByReport(candidate.id)
+        const unresolved = matches.filter(match => match.state !== 'confirmed' && match.state !== 'rejected')
+        if (unresolved.length > 0) return { status: 'match-review-required' as const, reportId: candidate.id, matches: unresolved, tradelines: candidate.tradelines.map(line => ({ id: line.id, bureau: String(line.creditor.bureau), creditor: line.creditor.normalized ?? '', maskedAccount: line.maskedAccount.normalized ?? '', balanceCents: line.balance.normalized ?? null })) }
+      }
+      return null
+    })()
+    return { email: user.email, workspaceId: workspaces[0]?.id ?? null, consent: !!user.consent, authorization: !!(await this.store.getAuthorizationByUser(userId)), pendingReview, reports: await Promise.all(reports.map(async report => ({ id: report.id, generatedAt: report.generatedAt, findingCount: report.findings.length, parserVersion: report.content?.parserVersion ?? 'legacy', exportId: (await this.store.findExportByReport(userId, report.id))?.id ?? null }))) }
   }
   private async requireAuthorization(userId: Id): Promise<void> {
     if (!(await this.store.getAuthorizationByUser(userId))) throw new Error('Written authorization required before processing')
@@ -644,8 +653,11 @@ export class CreditAnalysisPlatform {
   }
   async requestDeletion(sessionId: Id, providerDelayed = false): Promise<{ id: Id; status: 'pending-provider' | 'complete'; deleted: string[]; delayed: string[]; receipt: { completedAt: string; outcome: 'account-deleted' } }> {
     const userId = await this.requireSession(sessionId)
+    const uploads = await this.store.listUploadsForUser(userId)
+    // Remove raw bytes before relational metadata. On a blob failure, leave the account and
+    // upload rows intact so the next authenticated request can retry rather than falsely claim completion.
+    for (const upload of uploads) await this.blobStore.delete(upload.id)
     const deleted = await this.store.deleteAllUserData(userId)
-    for (const label of deleted) { const [table, id] = label.split(':'); if (table === 'uploads' && id) await this.blobStore.delete(id) }
     const receipt = { id: randomUUID(), completedAt: now(), outcome: 'account-deleted' as const }
     await this.store.deleteAccount(userId)
     await this.store.saveDeletionReceipt(receipt)

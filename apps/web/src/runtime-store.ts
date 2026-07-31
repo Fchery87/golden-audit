@@ -79,10 +79,12 @@ export class SqlitePlatformStore implements PlatformStore {
   async createAuthorization(record: AuthorizationRecord) { this.db.prepare('INSERT INTO authorizations (id, user_id, payload_json) VALUES (?, ?, ?)').run(record.id, record.userId, JSON.stringify(record)) }
 
   async getUpload(id: Id) { const row = this.db.prepare('SELECT payload_json FROM uploads WHERE id = ?').get(id) as { payload_json: string } | undefined; return row ? JSON.parse(row.payload_json) as Upload : undefined }
+  async listUploadsForUser(userId: Id) { const rows = this.db.prepare('SELECT payload_json FROM uploads WHERE user_id = ?').all(userId) as Array<{ payload_json: string }>; return rows.map(row => JSON.parse(row.payload_json) as Upload) }
   async getUploadIdByHash(key: string) { const row = this.db.prepare('SELECT id FROM uploads WHERE hash_key = ?').get(key) as { id: string } | undefined; return row?.id }
   async saveUpload(upload: Upload, hashKey?: string) { this.db.prepare('INSERT INTO uploads (id, user_id, hash_key, payload_json) VALUES (?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET hash_key = excluded.hash_key, payload_json = excluded.payload_json').run(upload.id, upload.userId, hashKey ?? null, JSON.stringify(upload)) }
 
   async getReport(id: Id) { const row = this.db.prepare('SELECT payload_json FROM normalized_reports WHERE id = ?').get(id) as { payload_json: string } | undefined; return row ? JSON.parse(row.payload_json) as CanonicalReport : undefined }
+  async listReportsForUser(userId: Id) { const rows = this.db.prepare('SELECT payload_json FROM normalized_reports WHERE user_id = ?').all(userId) as Array<{ payload_json: string }>; return rows.map(row => JSON.parse(row.payload_json) as CanonicalReport) }
   async saveReport(report: CanonicalReport) { this.db.prepare('INSERT INTO normalized_reports (id, user_id, upload_id, payload_json) VALUES (?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET payload_json = excluded.payload_json').run(report.id, report.userId, report.uploadId, JSON.stringify(report)) }
 
   async getMatch(id: Id) { const row = this.db.prepare('SELECT payload_json FROM matches WHERE id = ?').get(id) as { payload_json: string } | undefined; return row ? JSON.parse(row.payload_json) as MatchGroup : undefined }
@@ -90,6 +92,7 @@ export class SqlitePlatformStore implements PlatformStore {
   async listMatchesByReport(reportId: Id) { const rows = this.db.prepare('SELECT payload_json FROM matches WHERE report_id = ?').all(reportId) as Array<{ payload_json: string }>; return rows.map(row => JSON.parse(row.payload_json) as MatchGroup) }
 
   async getAnalysis(id: Id) { const row = this.db.prepare('SELECT payload_json FROM analyses WHERE id = ?').get(id) as { payload_json: string } | undefined; return row ? JSON.parse(row.payload_json) as Analysis : undefined }
+  async listAnalysesForUser(userId: Id) { const rows = this.db.prepare('SELECT payload_json FROM analyses WHERE user_id = ?').all(userId) as Array<{ payload_json: string }>; return rows.map(row => JSON.parse(row.payload_json) as Analysis) }
   async saveAnalysis(analysis: Analysis) { this.db.prepare('INSERT INTO analyses (id, user_id, report_id, payload_json) VALUES (?, ?, ?, ?)').run(analysis.id, analysis.userId, analysis.reportId, JSON.stringify(analysis)) }
 
   async getConsumerReport(id: Id) { const row = this.db.prepare('SELECT payload_json FROM consumer_reports WHERE id = ?').get(id) as { payload_json: string } | undefined; return row ? JSON.parse(row.payload_json) as ConsumerReport : undefined }

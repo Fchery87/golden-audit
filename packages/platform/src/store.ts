@@ -43,10 +43,12 @@ export interface PlatformStore {
   createAuthorization(record: AuthorizationRecord): Promise<void>
 
   getUpload(id: Id): Promise<Upload | undefined>
+  listUploadsForUser(userId: Id): Promise<Upload[]>
   getUploadIdByHash(key: string): Promise<Id | undefined>
   saveUpload(upload: Upload, hashKey?: string): Promise<void>
 
   getReport(id: Id): Promise<CanonicalReport | undefined>
+  listReportsForUser(userId: Id): Promise<CanonicalReport[]>
   saveReport(report: CanonicalReport): Promise<void>
 
   getMatch(id: Id): Promise<MatchGroup | undefined>
@@ -54,6 +56,7 @@ export interface PlatformStore {
   listMatchesByReport(reportId: Id): Promise<MatchGroup[]>
 
   getAnalysis(id: Id): Promise<Analysis | undefined>
+  listAnalysesForUser(userId: Id): Promise<Analysis[]>
   saveAnalysis(analysis: Analysis): Promise<void>
 
   getConsumerReport(id: Id): Promise<ConsumerReport | undefined>
@@ -146,10 +149,12 @@ export class InMemoryStore implements PlatformStore {
   async createAuthorization(record: AuthorizationRecord) { this.authorizations.set(record.id, structuredClone(record)); this.authorizationByUser.set(record.userId, record.id) }
 
   async getUpload(id: Id) { const u = this.uploads.get(id); return u ? structuredClone(u) : undefined }
+  async listUploadsForUser(userId: Id) { return [...this.uploads.values()].filter(item => item.userId === userId).map(item => structuredClone(item)) }
   async getUploadIdByHash(key: string) { return this.uploadByHash.get(key) }
   async saveUpload(upload: Upload, hashKey?: string) { this.uploads.set(upload.id, structuredClone(upload)); if (hashKey) this.uploadByHash.set(hashKey, upload.id) }
 
   async getReport(id: Id) { const r = this.reports.get(id); return r ? structuredClone(r) : undefined }
+  async listReportsForUser(userId: Id) { return [...this.reports.values()].filter(item => item.userId === userId).map(item => structuredClone(item)) }
   async saveReport(report: CanonicalReport) { this.reports.set(report.id, structuredClone(report)) }
 
   async getMatch(id: Id) { const m = this.matches.get(id); return m ? structuredClone(m) : undefined }
@@ -157,6 +162,7 @@ export class InMemoryStore implements PlatformStore {
   async listMatchesByReport(reportId: Id) { return [...this.matches.values()].filter(m => m.reportId === reportId).map(m => structuredClone(m)) }
 
   async getAnalysis(id: Id) { const a = this.analyses.get(id); return a ? structuredClone(a) : undefined }
+  async listAnalysesForUser(userId: Id) { return [...this.analyses.values()].filter(item => item.userId === userId).map(item => structuredClone(item)) }
   async saveAnalysis(analysis: Analysis) { this.analyses.set(analysis.id, structuredClone(analysis)) }
 
   async getConsumerReport(id: Id) { const c = this.consumerReports.get(id); return c ? structuredClone(c) : undefined }

@@ -42,11 +42,13 @@ npx wrangler r2 bucket list
 
 Then update `wrangler.jsonc` with the real R2 `bucket_name`.
 
-### 4. Apply the D1 migration locally and remotely
+### 4. Apply the D1 migrations locally and remotely
 ```bash
 npx wrangler d1 execute golden-audit-pilot --local --file=./database/migrations/003_pilot_pages_state.sql
+npx wrangler d1 execute golden-audit-pilot --local --file=./database/migrations/004_consumer_persistence.sql
 npx wrangler d1 execute golden-audit-pilot --remote --file=./database/migrations/003_pilot_pages_state.sql
-npx wrangler d1 execute golden-audit-pilot --remote --command="SELECT name FROM sqlite_master WHERE type='table' AND name='pilot_state';"
+npx wrangler d1 execute golden-audit-pilot --remote --file=./database/migrations/004_consumer_persistence.sql
+npx wrangler d1 execute golden-audit-pilot --remote --command="SELECT name FROM sqlite_master WHERE type='table' AND name IN ('pilot_state', 'consumer_reports', 'authorizations');"
 ```
 
 ### 5. Re-verify repo health after config edits

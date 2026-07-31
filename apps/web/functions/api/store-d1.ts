@@ -98,6 +98,7 @@ export class D1PlatformStore implements PlatformStore {
   async createAuthorization(record: AuthorizationRecord) { await this.run('INSERT INTO authorizations (id, user_id, payload_json) VALUES (?, ?, ?)', record.id, record.userId, JSON.stringify(record)) }
 
   async getUpload(id: Id) { const row = await this.first<{ payload_json: string }>('SELECT payload_json FROM uploads WHERE id = ?', id); return row ? JSON.parse(row.payload_json) as Upload : undefined }
+  async listUploadsForUser(userId: Id) { const rows = await this.all<{ payload_json: string }>('SELECT payload_json FROM uploads WHERE user_id = ?', userId); return rows.map(row => JSON.parse(row.payload_json) as Upload) }
   async getUploadIdByHash(key: string) { const row = await this.first<{ id: string }>('SELECT id FROM uploads WHERE hash_key = ?', key); return row?.id }
   async saveUpload(upload: Upload, hashKey?: string) {
     await this.run(
@@ -107,6 +108,7 @@ export class D1PlatformStore implements PlatformStore {
   }
 
   async getReport(id: Id) { const row = await this.first<{ payload_json: string }>('SELECT payload_json FROM normalized_reports WHERE id = ?', id); return row ? JSON.parse(row.payload_json) as CanonicalReport : undefined }
+  async listReportsForUser(userId: Id) { const rows = await this.all<{ payload_json: string }>('SELECT payload_json FROM normalized_reports WHERE user_id = ?', userId); return rows.map(row => JSON.parse(row.payload_json) as CanonicalReport) }
   async saveReport(report: CanonicalReport) { await this.run('INSERT INTO normalized_reports (id, user_id, upload_id, payload_json) VALUES (?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET payload_json = excluded.payload_json', report.id, report.userId, report.uploadId, JSON.stringify(report)) }
 
   async getMatch(id: Id) { const row = await this.first<{ payload_json: string }>('SELECT payload_json FROM matches WHERE id = ?', id); return row ? JSON.parse(row.payload_json) as MatchGroup : undefined }
@@ -114,6 +116,7 @@ export class D1PlatformStore implements PlatformStore {
   async listMatchesByReport(reportId: Id) { const rows = await this.all<{ payload_json: string }>('SELECT payload_json FROM matches WHERE report_id = ?', reportId); return rows.map(row => JSON.parse(row.payload_json) as MatchGroup) }
 
   async getAnalysis(id: Id) { const row = await this.first<{ payload_json: string }>('SELECT payload_json FROM analyses WHERE id = ?', id); return row ? JSON.parse(row.payload_json) as Analysis : undefined }
+  async listAnalysesForUser(userId: Id) { const rows = await this.all<{ payload_json: string }>('SELECT payload_json FROM analyses WHERE user_id = ?', userId); return rows.map(row => JSON.parse(row.payload_json) as Analysis) }
   async saveAnalysis(analysis: Analysis) { await this.run('INSERT INTO analyses (id, user_id, report_id, payload_json) VALUES (?, ?, ?, ?)', analysis.id, analysis.userId, analysis.reportId, JSON.stringify(analysis)) }
 
   async getConsumerReport(id: Id) { const row = await this.first<{ payload_json: string }>('SELECT payload_json FROM consumer_reports WHERE id = ?', id); return row ? JSON.parse(row.payload_json) as ConsumerReport : undefined }
