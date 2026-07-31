@@ -11,9 +11,9 @@ import {
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 
-export function ResultsView({ kickoff }: { kickoff: KickoffResult }) {
+export function ResultsView({ kickoff, onCompleted }: { kickoff: KickoffResult; onCompleted?: (result: CompleteAnalysisResult) => void }) {
   if (kickoff.status === 'match-review-required') {
-    return <CollisionReview kickoff={kickoff} />
+    return <CollisionReview kickoff={kickoff} onCompleted={onCompleted} />
   }
   return <Reading consumerReportId={kickoff.consumerReportId ?? ''} exportId={kickoff.exportId ?? ''} />
 }
@@ -164,7 +164,7 @@ function ReportList({ label, items }: { label: string; items: string[] }) {
   return <section className="mt-5"><p className="eyebrow">{label}</p><ul className="mt-2 space-y-1 text-sm text-muted-foreground">{items.map((item) => <li key={item}>— {item}</li>)}</ul></section>
 }
 
-function CollisionReview({ kickoff }: { kickoff: KickoffResult }) {
+export function CollisionReview({ kickoff, onCompleted }: { kickoff: KickoffResult; onCompleted?: (result: CompleteAnalysisResult) => void }) {
   const groups = kickoff.matches.filter((m) => m.state === 'split')
   const tlById = React.useMemo(() => {
     const map = new Map<string, TradelineSummary>()
@@ -218,6 +218,7 @@ function CollisionReview({ kickoff }: { kickoff: KickoffResult }) {
   }
 
   if (result) {
+    if (onCompleted) { onCompleted(result); return null }
     return <Reading consumerReportId={result.consumerReportId} exportId={result.exportId} />
   }
 

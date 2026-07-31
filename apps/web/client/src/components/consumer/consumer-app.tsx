@@ -3,7 +3,8 @@ import { AlertCircle, FileText, Loader2, LogIn, ShieldCheck, Trash2, Upload } fr
 import { Button } from '@/components/ui/button'
 import { Input, Label } from '@/components/ui/input'
 import { ReportDocument, ReportActions } from '@/components/consumer/report-document'
-import { api, type ConsumerDashboard, type ConsumerReport, type Disclosure, type KickoffResult } from '@/lib/api'
+import { ResultsView } from '@/components/flow/results-view'
+import { api, type ConsumerDashboard, type ConsumerReport, type Disclosure, type KickoffResult, type CompleteAnalysisResult } from '@/lib/api'
 
 const emptyAuth = { email: '', password: '', inviteCode: '' }
 type AuthMode = 'sign-in' | 'register'
@@ -107,8 +108,9 @@ function AuthorizationStep({ onComplete }: { onComplete: () => Promise<void> }) 
 }
 
 function UploadStep({ workspaceId, onComplete }: { workspaceId: string | null; onComplete: (id: string) => Promise<void> }) {
-  const [file, setFile] = React.useState<File | null>(null); const [busy, setBusy] = React.useState(false); const [error, setError] = React.useState<string | null>(null)
-  async function submit(event: React.FormEvent) { event.preventDefault(); if (!file || !workspaceId) return; if (file.type !== 'application/pdf' && !file.name.toLowerCase().endsWith('.pdf')) { setError('Choose an IdentityIQ PDF report.'); return }; setBusy(true); setError(null); try { const initialized = await api.initUpload(workspaceId); const contentBase64 = await fileToBase64(file); await api.completeUpload({ uploadId: initialized.id, token: initialized.token, fileName: file.name, mediaType: 'application/pdf', contentBase64 }); const result: KickoffResult = await api.kickoffAnalysis(initialized.id, true); if (result.status !== 'analysis-complete' || !result.consumerReportId) throw new Error('This report needs match review before it can be completed.'); await onComplete(result.consumerReportId) } catch (cause) { setError(cause instanceof Error ? cause.message : 'Unable to process this report') } finally { setBusy(false) } }
+  const [file, setFile] = React.useState<File | null>(null); const [busy, setBusy] = React.useState(false); const [error, setError] = React.useState<string | null>(null); const [review, setReview] = React.useState<KickoffResult | null>(null)
+  async function submit(event: React.FormEvent) { event.preventDefault(); if (!file || !workspaceId) return; if (file.type !== 'application/pdf' && !file.name.toLowerCase().endsWith('.pdf')) { setError('Choose an IdentityIQ PDF report.'); return }; setBusy(true); setError(null); try { const initialized = await api.initUpload(workspaceId); const contentBase64 = await fileToBase64(file); await api.completeUpload({ uploadId: initialized.id, token: initialized.token, fileName: file.name, mediaType: 'application/pdf', contentBase64 }); const result = await api.kickoffAnalysis(initialized.id, true); if (result.status === 'analysis-complete' && result.consumerReportId) await onComplete(result.consumerReportId); else setReview(result) } catch (cause) { setError(cause instanceof Error ? cause.message : 'Unable to process this report') } finally { setBusy(false) } }
+  if (review) return <ResultsView kickoff={review} onCompleted={(result: CompleteAnalysisResult) => void onComplete(result.consumerReportId)} />
   return <section className="mt-10 max-w-2xl"><h1 className="font-serif text-3xl tracking-tight">Upload your IdentityIQ PDF.</h1><p className="mt-3 text-muted-foreground">Choose the PDF exported from IdentityIQ. Saved HTML reports are not supported because they do not contain the account data needed for this review.</p><form onSubmit={submit} className="mt-8 border border-rule bg-paper p-6"><Label>Credit report PDF<Input className="mt-2" required type="file" accept="application/pdf,.pdf" onChange={event => setFile(event.target.files?.[0] ?? null)} /></Label>{file && <p className="mt-4 text-sm text-muted-foreground">{file.name} · {Math.ceil(file.size / 1024)} KB</p>}{error && <p className="mt-4 text-sm text-negative" role="alert">{error}</p>}<Button className="mt-6" type="submit" disabled={!file || busy}>{busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}Review my report</Button></form></section>
 }
 

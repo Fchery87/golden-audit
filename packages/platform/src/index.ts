@@ -210,11 +210,9 @@ export class CreditAnalysisPlatform {
     return workspace
   }
 
-  async acceptAuthorization(sessionId: Id, acknowledgement?: { version: string; accepted: boolean }): Promise<AuthorizationRecord> {
+  async acceptAuthorization(sessionId: Id, acknowledgement: { version: string; accepted: boolean } = { version: AUTHORIZATION_VERSION, accepted: true }): Promise<AuthorizationRecord> {
     const userId = await this.requireSession(sessionId)
-    // The HTTP boundary requires an explicit, versioned acknowledgement. The optional argument
-    // preserves the platform's pre-existing programmatic seam for trusted test/setup fixtures.
-    if (acknowledgement && (!acknowledgement.accepted || acknowledgement.version !== AUTHORIZATION_VERSION)) throw new Error('Current written authorization must be affirmatively accepted')
+    if (!acknowledgement.accepted || acknowledgement.version !== AUTHORIZATION_VERSION) throw new Error('Current written authorization must be affirmatively accepted')
     const record: AuthorizationRecord = { id: randomUUID(), userId, version: AUTHORIZATION_VERSION, acceptedAt: now() }
     await this.store.createAuthorization(record)
     await this.audit('authorization-accepted', userId, record.id, { version: AUTHORIZATION_VERSION })

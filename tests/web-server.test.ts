@@ -243,7 +243,7 @@ test('web boundary supports the smallest real consumer pilot flow through analys
     assert.equal(consent.statusCode, 201)
     assert.match(consent.body.workspaceId, /[0-9a-f-]{36}/i)
 
-    const authorization = await postJson<AuthorizationResponse>(port, '/consumer/authorization', {}, sessionHeader)
+    const authorization = await postJson<AuthorizationResponse>(port, '/consumer/authorization', { version: 'authorization-2026-01', accepted: true }, sessionHeader)
     assert.equal(authorization.statusCode, 201)
     assert.match(authorization.body.id, /[0-9a-f-]{36}/i)
     assert.equal(authorization.body.version, 'authorization-2026-01')
@@ -332,7 +332,7 @@ test('web boundary supports manual subgroup confirmation for oversized collision
       residence: 'CA',
       analysisJurisdiction: 'CA',
     }, sessionHeader)
-    await postJson<AuthorizationResponse>(port, '/consumer/authorization', {}, sessionHeader)
+    await postJson<AuthorizationResponse>(port, '/consumer/authorization', { version: 'authorization-2026-01', accepted: true }, sessionHeader)
     const uploadInit = await postJson<UploadInitResponse>(port, '/consumer/uploads/init', { workspaceId: consent.body.workspaceId }, sessionHeader)
 
     const oversizedReport = makeSyntheticReport([

@@ -246,7 +246,8 @@ async function handleConsent(request: IncomingMessage, response: ServerResponse)
 async function handleAuthorization(request: IncomingMessage, response: ServerResponse): Promise<void> {
   const sessionId = getSessionId(request)
   const body = await readJsonBody(request) as Partial<ConsumerAuthorizationBody>
-  const authorization = await platform.acceptAuthorization(sessionId, body.version && body.accepted !== undefined ? { version: body.version, accepted: body.accepted } : undefined)
+  if (!body.version || body.accepted !== true) throw new Error('Current written authorization must be affirmatively accepted')
+  const authorization = await platform.acceptAuthorization(sessionId, { version: body.version, accepted: body.accepted })
   respondJson(response, 201, authorization)
 }
 async function handleDisclosure(_request: IncomingMessage, response: ServerResponse): Promise<void> { respondJson(response, 200, platform.getDisclosure()) }

@@ -134,8 +134,9 @@ async function handleConsent(env: PilotPagesEnv, request: any): Promise<Response
 async function handleAuthorization(env: PilotPagesEnv, request: any): Promise<Response> {
   const sessionId = getSessionId(request)
   const body = await readJsonBody(request) as Partial<ConsumerAuthorizationBody>
+  if (!body.version || body.accepted !== true) throw new Error('Current written authorization must be affirmatively accepted')
   const platform = loadPilotPlatform(env)
-  const authorization = await platform.acceptAuthorization(sessionId, body.version && body.accepted !== undefined ? { version: body.version, accepted: body.accepted } : undefined)
+  const authorization = await platform.acceptAuthorization(sessionId, { version: body.version, accepted: body.accepted })
   return respondJson(authorization, 201)
 }
 async function handleDisclosure(env: PilotPagesEnv): Promise<Response> { return respondJson(loadPilotPlatform(env).getDisclosure()) }
