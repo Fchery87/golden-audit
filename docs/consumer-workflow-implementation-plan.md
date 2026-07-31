@@ -299,10 +299,12 @@ The highest-uncertainty item gated the most work, so it went first.
 - The published pilot ruleset now includes divergence checks for balance, credit limit, past due, status, opened date, and last-reported date; internal checks for closed/paid with a positive balance and past due exceeding balance; a revolving-without-credit-limit observation; duplicate tradelines; and the collapsed partial-furnishing observation.
 - Validation gate: all four available PDF samples pass the three-bureau parser smoke test, and the full suite remains green (89/89).
 
-### Phase 3 — Content
+### Phase 3 — Content — ✅ complete (2026-07-31)
 
-- D7: section primers and per-finding modules as reviewed content files; authority anchoring; real human governance gate replacing the self-approving bootstrap.
-- D2: report content model including the coverage table sourced from `RuleAudit`.
+- D7: `packages/platform/src/reviewed-content.ts` is the static, reviewed California corpus: tier-1 section primers plus a module for each published Phase-2 rule. Authorities carry public HTTPS documentation links and all consumer-facing catalog prose passes the output guard before publication.
+- The prior `bootstrap-*` synthetic reviewers and self-approval sequence are gone. `bootstrapGovernance` installs the bundled catalog identically in Node and Pages; catalog installation fails closed for a stale review, mismatched digest, unpublished item, unresolved authority/module, unsafe prose, or disabled rule content. `scripts/verify-reviewed-content.ts` binds the content digest to the named reviewer’s recorded commit and enforces the 90-day review interval.
+- D2: each stored `ConsumerReport` snapshots the complete Finding schema with resolved education and authority references, Tier-1 primers, versions, lossless `RuleAudit` coverage rows, and parser capability plus actual-field-state disclosure. The current reading surface renders these sections, including a calibrated zero-findings state; legacy reports retain their prior compact reading.
+- Validation gate: `npm run verify:content`, typecheck, the complete 89-test suite, the server build, and the client production build pass.
 
 ### Phase 4 — Surface
 

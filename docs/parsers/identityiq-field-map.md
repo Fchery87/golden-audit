@@ -3,14 +3,14 @@
 > **Redacted.** This document contains **only field labels and layout structure** derived from a real IdentityIQ tri-bureau export. It contains **no values** (no names, account numbers, balances, or dates). The source files live in `docs/reports/` and are gitignored — never committed, processed locally only under the trust-boundary controls in ticket 12.
 
 **Provider:** IdentityIQ (tri-bureau aggregator — renders TransUnion, Experian, and Equifax sections).
-**Lead provider for the pilot** (per product decision): IdentityIQ, supported in **both PDF and HTML**.
-**Sample basis:** one IdentityIQ report exported as both PDF (native-text, 8 pp / 13 text pages) and HTML (AngularJS snapshot, ~671 KB). ⚠️ **One sample → overfitting risk.** Pilot use requires ≥2 samples (same provider, different person/date) before the adapter is trusted.
+**Lead provider for the pilot** (per product decision): IdentityIQ, **PDF-only** ingestion.
+**Sample basis:** four IdentityIQ PDF reports (2020–2025). The saved HTML files are template shells and are not an ingestion format. ⚠️ Layout coverage remains finite; parser changes must retain the four-sample smoke gate.
 
-## Why two formats, and how they differ
-- **PDF:** fully rendered native text; reliable data, but the three bureaus are laid out in **side-by-side columns**, so field extraction must be **coordinate-aware** (column x-positions), not line-regex. `pdftotext -layout` fragments the columns — confirmed empirically — so the adapter must use a library that yields word bounding boxes (e.g., a coordinate-aware PDF text extractor), not regex over flattened text.
-- **HTML:** an AngularJS snapshot — semantic model is rich (bureau `@symbol` codes; named fields such as `@accountNumber`; `Tradeline` partitions) but **template markup is interleaved with interpolated data** (`ng-` directives, residual `{{ }}`). Some values are rendered (present as text), some are not. Cleanest parse target is the **rendered table cells**, ignoring template remnants — or an IdentityIQ data export if one exists.
+## Why PDF is the ingestion format
+- **PDF:** fully rendered native text; reliable data, but the three bureaus are laid out in **side-by-side columns**, so field extraction must be **coordinate-aware** (column x-positions), not line-regex. The current `unpdf`/pdfjs path supplies word bounding boxes and is validated across the four local PDF samples.
+- **Saved HTML:** an AngularJS template shell without embedded per-account values. Executing report-embedded code to render it is not an acceptable ingestion path, so no HTML adapter is supported.
 
-## Top-level report structure (both formats)
+## Top-level report structure (PDF)
 - Report metadata: report date (one per bureau), reference number, generating provider.
 - **Personal information:** name, current/prior addresses, employment, aliases / known-as, fraud statements.
 - **Account history** (open revolving/installment/mortgage tradelines).
