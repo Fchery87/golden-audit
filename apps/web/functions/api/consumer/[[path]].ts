@@ -16,6 +16,7 @@ type ConsumerConsentBody = {
   residence: string
   analysisJurisdiction: string
 }
+type ConsumerAuthorizationBody = { version: string; accepted: boolean }
 type UploadInitBody = { workspaceId: string }
 type UploadCompleteBody = { uploadId: string; token: string; fileName: string; mediaType: string; contentBase64: string }
 type AnalysisKickoffBody = { jurisdiction?: string; autoConfirmSimpleMatches?: boolean }
@@ -132,10 +133,13 @@ async function handleConsent(env: PilotPagesEnv, request: any): Promise<Response
 
 async function handleAuthorization(env: PilotPagesEnv, request: any): Promise<Response> {
   const sessionId = getSessionId(request)
+  const body = await readJsonBody(request) as Partial<ConsumerAuthorizationBody>
   const platform = loadPilotPlatform(env)
-  const authorization = await platform.acceptAuthorization(sessionId)
+  const authorization = await platform.acceptAuthorization(sessionId, body.version && body.accepted !== undefined ? { version: body.version, accepted: body.accepted } : undefined)
   return respondJson(authorization, 201)
 }
+async function handleDisclosure(env: PilotPagesEnv): Promise<Response> { return respondJson(loadPilotPlatform(env).getDisclosure()) }
+async function handleDashboard(env: PilotPagesEnv, request: any): Promise<Response> { return respondJson(await loadPilotPlatform(env).getConsumerDashboard(getSessionId(request))) }
 
 async function handleUploadInit(env: PilotPagesEnv, request: any): Promise<Response> {
   const sessionId = getSessionId(request)
@@ -234,8 +238,8 @@ async function handleGetExport(env: PilotPagesEnv, request: any, exportId: strin
 async function handleDeletion(env: PilotPagesEnv, request: any): Promise<Response> {
   const sessionId = getSessionId(request)
   const platform = loadPilotPlatform(env)
-  const job = await platform.requestDeletion(sessionId)
-  return respondJson(job, 201)
+  const receipt = await platform.requestDeletion(sessionId)
+  return respondJson(receipt, 201, { 'set-cookie': clearSessionCookieHeader(request) })
 }
 
 async function handlePasswordResetRequest(env: PilotPagesEnv, request: any): Promise<Response> {
@@ -298,6 +302,8 @@ async function route(context: { request: any; env: PilotPagesEnv }): Promise<Res
     return respondJson({ service: 'pages-functions', onboarding: buildPilotOnboardingPayload(platform.getLaunchScope(), 'Pilot currently limited to approved pilot states only.', true) })
   }
 
+  if (request.method === 'GET' && path === '/api/consumer/disclosures') return handleDisclosure(env)
+  if (request.method === 'GET' && path === '/api/consumer/dashboard') return handleDashboard(env, request)
   if (request.method === 'POST' && path === '/api/consumer/register') return handleRegister(env, request)
   if (request.method === 'POST' && path === '/api/consumer/sign-in') return handleSignIn(env, request)
   if (request.method === 'POST' && path === '/api/consumer/sign-out') return handleSignOut(env, request)

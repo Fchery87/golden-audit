@@ -159,8 +159,10 @@ export type CoverageRow = { ruleId: Id; name: string; requiredInputs: string[]; 
 export type ParserFieldAvailability = { field: string; capability: 'supported' | 'planned'; states: Record<CanonicalValue<unknown>['state'], number> }
 export type ReportContent = { catalogVersion: string; rulesetVersion: string; parserVersion: string; sectionPrimers: ReportPrimer[]; coverage: CoverageRow[]; parserFields: ParserFieldAvailability[] }
 export type ConsumerReport = { id: Id; userId: Id; analysisId: Id; limitations: string[]; overview: Record<string, number>; findings: ReportFinding[]; actions: ActionItem[]; content?: ReportContent; generatedAt: string }
-export type ExportArtifact = { id: Id; userId: Id; reportId: Id; content: string; createdAt: string }
+export type ExportArtifact = { id: Id; userId: Id; reportId: Id; formatVersion?: string; content: string; createdAt: string }
 export type DeletionJob = { id: Id; userId: Id; status: 'pending-provider' | 'complete'; deleted: string[]; delayed: string[]; completedAt?: string }
+/** Purpose-limited operational proof of completed deletion. It must never carry an account, user, session, report, or artifact identifier. */
+export type DeletionReceipt = { id: Id; completedAt: string; outcome: 'account-deleted' }
 export type AuditEvent = { type: string; actorId: Id; subjectId: Id; at: string; metadata: Record<string, string> }
 
 export type PilotApprovalArea = 'product' | 'legal' | 'privacy' | 'security' | 'operations' | 'accessibility' | 'vendor'

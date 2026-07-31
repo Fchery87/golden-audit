@@ -59,6 +59,27 @@ const now = () => new Date().toISOString()
 const hashPassword = (password: string, salt: string) => scryptSync(password, salt, 32).toString('hex')
 const maskAccount = (value: string) => `••••${value.replace(/\D/g, '').slice(-4)}`
 
+function maskExportValue(value: unknown): unknown {
+  if (typeof value === 'string') {
+    const safe = value.replace(/No legal verdict/gi, 'No individual legal conclusion').replace(/legal violation/gi, 'legal conclusion')
+    return /\d{5,}/.test(safe) ? maskAccount(safe) : safe
+  }
+  if (Array.isArray(value)) return value.map(maskExportValue)
+  if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, maskExportValue(item)]))
+  return value
+}
+function exportProjection(report: ConsumerReport) {
+  const safe = maskExportValue({
+    overview: report.overview,
+    limitations: report.limitations.map(limitation => limitation.replace(/No legal verdict/gi, 'No individual legal conclusion').replace(/legal violation/gi, 'legal conclusion')),
+    disclaimer: 'Educational information only; no specific outcome is promised.',
+    findings: report.findings,
+    content: report.content,
+    generatedAt: report.generatedAt,
+  })
+  return safe
+}
+
 export class CreditAnalysisPlatform {
   private authorities = new Map<Id, Authority>()
   private modules = new Map<Id, EducationModule>()
@@ -189,8 +210,11 @@ export class CreditAnalysisPlatform {
     return workspace
   }
 
-  async acceptAuthorization(sessionId: Id): Promise<AuthorizationRecord> {
+  async acceptAuthorization(sessionId: Id, acknowledgement?: { version: string; accepted: boolean }): Promise<AuthorizationRecord> {
     const userId = await this.requireSession(sessionId)
+    // The HTTP boundary requires an explicit, versioned acknowledgement. The optional argument
+    // preserves the platform's pre-existing programmatic seam for trusted test/setup fixtures.
+    if (acknowledgement && (!acknowledgement.accepted || acknowledgement.version !== AUTHORIZATION_VERSION)) throw new Error('Current written authorization must be affirmatively accepted')
     const record: AuthorizationRecord = { id: randomUUID(), userId, version: AUTHORIZATION_VERSION, acceptedAt: now() }
     await this.store.createAuthorization(record)
     await this.audit('authorization-accepted', userId, record.id, { version: AUTHORIZATION_VERSION })
@@ -203,6 +227,14 @@ export class CreditAnalysisPlatform {
     return structuredClone(record)
   }
   getRetentionPolicy(): typeof RETENTION_POLICY { return RETENTION_POLICY }
+  getDisclosure() { return { authorizationVersion: AUTHORIZATION_VERSION, authorizationText: AUTHORIZATION_TEXT, retentionPolicy: RETENTION_POLICY } }
+  async getConsumerDashboard(sessionId: Id) {
+    const userId = await this.requireSession(sessionId)
+    const user = await this.store.getUserById(userId); if (!user) throw new Error('Not found')
+    const workspaces = await this.store.listWorkspacesForUser(userId)
+    const reports = await this.store.listConsumerReportsForUser(userId)
+    return { email: user.email, workspaceId: workspaces[0]?.id ?? null, consent: !!user.consent, authorization: !!(await this.store.getAuthorizationByUser(userId)), reports: await Promise.all(reports.map(async report => ({ id: report.id, generatedAt: report.generatedAt, findingCount: report.findings.length, parserVersion: report.content?.parserVersion ?? 'legacy', exportId: (await this.store.findExportByReport(userId, report.id))?.id ?? null }))) }
+  }
   private async requireAuthorization(userId: Id): Promise<void> {
     if (!(await this.store.getAuthorizationByUser(userId))) throw new Error('Written authorization required before processing')
   }
@@ -599,17 +631,12 @@ export class CreditAnalysisPlatform {
     const userId = await this.requireSession(sessionId)
     const report = await this.store.getConsumerReport(consumerReportId); if (!report || report.userId !== userId) throw new Error('Not found')
     const existing = await this.store.findExportByReport(userId, consumerReportId)
-    if (existing) return structuredClone(existing)
-    const analysis = await this.store.getAnalysis(report.analysisId)
-    const content = JSON.stringify({
-      generatedAt: now(), scope: 'Validated personal credit analysis', rulesetVersion: analysis?.versions.ruleset,
-      limitations: report.limitations.map(limitation => limitation.replace(/No legal verdict/gi, 'No individual legal conclusion')).map(limitation => limitation.replace(/legal violation/gi, 'legal conclusion')), disclaimer: 'Educational information only; no specific outcome is promised.',
-      findings: report.findings.map(({ authorities: _authorities, educationModules: _educationModules, ...finding }) => ({ ...finding, evidence: finding.evidence.map(evidence => ({ ...evidence, value: typeof evidence.value === 'string' && /\d{5,}/.test(evidence.value) ? maskAccount(evidence.value) : evidence.value })) })),
-    }, null, 2)
+    if (existing?.formatVersion === 'consumer-report-v2') return structuredClone(existing)
+    const content = JSON.stringify({ formatVersion: 'consumer-report-v2', generatedAt: now(), scope: 'Validated personal credit analysis', report: exportProjection(report) }, null, 2)
     assertSafeConsumerOutput(content)
-    const artifact: ExportArtifact = { id: randomUUID(), userId, reportId: consumerReportId, content, createdAt: now() }
+    const artifact: ExportArtifact = { id: existing?.id ?? randomUUID(), userId, reportId: consumerReportId, formatVersion: 'consumer-report-v2', content, createdAt: existing?.createdAt ?? now() }
     await this.store.saveExport(artifact)
-    await this.audit('export-created', userId, artifact.id, {})
+    if (!existing) await this.audit('export-created', userId, artifact.id, {})
     return structuredClone(artifact)
   }
   async getExport(sessionId: Id, exportId: Id): Promise<ExportArtifact> {
@@ -617,17 +644,14 @@ export class CreditAnalysisPlatform {
     const artifact = await this.store.getExport(exportId); if (!artifact || artifact.userId !== userId) throw new Error('Not found')
     return structuredClone(artifact)
   }
-  async requestDeletion(sessionId: Id, providerDelayed = false): Promise<DeletionJob> {
+  async requestDeletion(sessionId: Id, providerDelayed = false): Promise<{ id: Id; status: 'pending-provider' | 'complete'; deleted: string[]; delayed: string[]; receipt: { completedAt: string; outcome: 'account-deleted' } }> {
     const userId = await this.requireSession(sessionId)
     const deleted = await this.store.deleteAllUserData(userId)
-    for (const label of deleted) {
-      const [table, id] = label.split(':')
-      if (table === 'uploads' && id) await this.blobStore.delete(id)
-    }
-    const job: DeletionJob = { id: randomUUID(), userId, status: providerDelayed ? 'pending-provider' : 'complete', deleted, delayed: providerDelayed ? ['backup-lifecycle', 'model-provider'] : [], ...(providerDelayed ? {} : { completedAt: now() }) }
-    await this.store.saveDeletionJob(job)
-    await this.audit('deletion-requested', userId, job.id, { status: job.status })
-    return structuredClone(job)
+    for (const label of deleted) { const [table, id] = label.split(':'); if (table === 'uploads' && id) await this.blobStore.delete(id) }
+    const receipt = { id: randomUUID(), completedAt: now(), outcome: 'account-deleted' as const }
+    await this.store.deleteAccount(userId)
+    await this.store.saveDeletionReceipt(receipt)
+    return { id: receipt.id, status: providerDelayed ? 'pending-provider' : 'complete', deleted, delayed: providerDelayed ? ['backup-lifecycle', 'model-provider'] : [], receipt: { completedAt: receipt.completedAt, outcome: receipt.outcome } }
   }
 
   async narrate(sessionId: Id, analysisId: Id, provider: (payload: string) => string): Promise<{ text: string; mode: 'generated' | 'fallback'; versions: Record<string, string> }> {

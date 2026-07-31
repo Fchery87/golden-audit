@@ -118,3 +118,14 @@
     scroll-behavior: auto !important;
   }
 }
+
+@media print {
+  @page { margin: 16mm; }
+  .no-print, .skip-link { display: none !important; }
+  body { background: white; color: black; font-size: 11pt; }
+  .report-document { max-width: none; }
+  .report-card, tr { break-inside: avoid; page-break-inside: avoid; }
+  a { color: black; text-decoration: underline; }
+  a[href]::after { content: " (" attr(href) ")"; font-size: 8pt; }
+  table { min-width: 0 !important; }
+}

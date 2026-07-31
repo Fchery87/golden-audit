@@ -88,7 +88,7 @@ async function advance(key: StepKey, s: FlowSnapshot, form: FormState): Promise<
       return { ...EMPTY, userId: res.userId }
     }
     case 'consent': {
-      const res = await api.consent()
+      const res = await api.consent('CA', 'CA')
       return {
         ...s,
         workspaceId: res.workspaceId,
@@ -100,7 +100,7 @@ async function advance(key: StepKey, s: FlowSnapshot, form: FormState): Promise<
       }
     }
     case 'authorization': {
-      const res = await api.acceptAuthorization()
+      const res = await api.acceptAuthorization('authorization-2026-01', true)
       return { ...s, authorizationVersion: res.version }
     }
     case 'upload-init': {

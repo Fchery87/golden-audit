@@ -36,6 +36,7 @@ export interface PlatformStore {
   listActiveSessionsForUser(userId: Id): Promise<Session[]>
 
   getWorkspace(id: Id): Promise<Workspace | undefined>
+  listWorkspacesForUser(userId: Id): Promise<Workspace[]>
   createWorkspace(workspace: Workspace): Promise<void>
 
   getAuthorizationByUser(userId: Id): Promise<AuthorizationRecord | undefined>
@@ -56,6 +57,7 @@ export interface PlatformStore {
   saveAnalysis(analysis: Analysis): Promise<void>
 
   getConsumerReport(id: Id): Promise<ConsumerReport | undefined>
+  listConsumerReportsForUser(userId: Id): Promise<ConsumerReport[]>
   saveConsumerReport(report: ConsumerReport): Promise<void>
 
   getExport(id: Id): Promise<ExportArtifact | undefined>
@@ -63,8 +65,10 @@ export interface PlatformStore {
   findExportByReport(userId: Id, reportId: Id): Promise<ExportArtifact | undefined>
 
   saveDeletionJob(job: DeletionJob): Promise<void>
+  saveDeletionReceipt(receipt: { id: Id; completedAt: string; outcome: 'account-deleted' }): Promise<void>
   /** Deletes every row owned by userId across uploads/reports/matches/analyses/consumerReports/exports. Returns "table:id" labels for the deleted rows (mirrors the pre-existing DeletionJob.deleted shape). */
   deleteAllUserData(userId: Id): Promise<string[]>
+  deleteAccount(userId: Id): Promise<void>
 
   appendAuditEvent(event: AuditEvent & { id: Id }): Promise<void>
   listAuditEventsForActor(actorId: Id): Promise<AuditEvent[]>
@@ -117,6 +121,7 @@ export class InMemoryStore implements PlatformStore {
   private consumerReports = new Map<Id, ConsumerReport>()
   private exports = new Map<Id, ExportArtifact>()
   private deletionJobs = new Map<Id, DeletionJob>()
+  private deletionReceipts = new Map<Id, { id: Id; completedAt: string; outcome: 'account-deleted' }>()
   private auditEvents: Array<AuditEvent & { id: Id }> = []
   private invites = new Map<string, { code: string; createdAt: string; usedAt?: string; usedByUserId?: Id }>()
   private tokens = new Map<string, { kind: string; userId: Id; expiresAt: string }>()
@@ -134,6 +139,7 @@ export class InMemoryStore implements PlatformStore {
   async listActiveSessionsForUser(userId: Id) { return [...this.sessions.values()].filter(s => s.userId === userId && !s.revokedAt).map(s => structuredClone(s)) }
 
   async getWorkspace(id: Id) { const w = this.workspaces.get(id); return w ? structuredClone(w) : undefined }
+  async listWorkspacesForUser(userId: Id) { return [...this.workspaces.values()].filter(item => item.userId === userId).map(item => structuredClone(item)) }
   async createWorkspace(workspace: Workspace) { this.workspaces.set(workspace.id, structuredClone(workspace)) }
 
   async getAuthorizationByUser(userId: Id) { const id = this.authorizationByUser.get(userId); return id ? structuredClone(this.authorizations.get(id)) : undefined }
@@ -154,6 +160,7 @@ export class InMemoryStore implements PlatformStore {
   async saveAnalysis(analysis: Analysis) { this.analyses.set(analysis.id, structuredClone(analysis)) }
 
   async getConsumerReport(id: Id) { const c = this.consumerReports.get(id); return c ? structuredClone(c) : undefined }
+  async listConsumerReportsForUser(userId: Id) { return [...this.consumerReports.values()].filter(item => item.userId === userId).map(item => structuredClone(item)) }
   async saveConsumerReport(report: ConsumerReport) { this.consumerReports.set(report.id, structuredClone(report)) }
 
   async getExport(id: Id) { const e = this.exports.get(id); return e ? structuredClone(e) : undefined }
@@ -161,6 +168,7 @@ export class InMemoryStore implements PlatformStore {
   async findExportByReport(userId: Id, reportId: Id) { return structuredClone([...this.exports.values()].find(e => e.userId === userId && e.reportId === reportId)) }
 
   async saveDeletionJob(job: DeletionJob) { this.deletionJobs.set(job.id, structuredClone(job)) }
+  async saveDeletionReceipt(receipt: { id: Id; completedAt: string; outcome: 'account-deleted' }) { this.deletionReceipts.set(receipt.id, structuredClone(receipt)) }
   async deleteAllUserData(userId: Id): Promise<string[]> {
     const deleted: string[] = []
     for (const [name, map] of [['uploads', this.uploads], ['reports', this.reports], ['matches', this.matches], ['analyses', this.analyses], ['consumer-reports', this.consumerReports], ['exports', this.exports]] as const) {
@@ -169,7 +177,15 @@ export class InMemoryStore implements PlatformStore {
     for (const [key, id] of [...this.uploadByHash.entries()]) if (!this.uploads.has(id)) this.uploadByHash.delete(key)
     return deleted
   }
-
+  async deleteAccount(userId: Id) {
+    this.users.delete(userId)
+    for (const [email, id] of this.usersByEmail) if (id === userId) this.usersByEmail.delete(email)
+    for (const [id, item] of this.sessions) if (item.userId === userId) this.sessions.delete(id)
+    for (const [id, item] of this.workspaces) if (item.userId === userId) this.workspaces.delete(id)
+    for (const [id, item] of this.authorizations) if (item.userId === userId) { this.authorizations.delete(id); this.authorizationByUser.delete(userId) }
+    for (const [key, item] of this.tokens) if (item.userId === userId) this.tokens.delete(key)
+    this.auditEvents = this.auditEvents.filter(event => event.actorId !== userId && event.subjectId !== userId)
+  }
   async appendAuditEvent(event: AuditEvent & { id: Id }) { this.auditEvents.push(structuredClone(event)) }
   async listAuditEventsForActor(actorId: Id) { return this.auditEvents.filter(e => e.actorId === actorId).map(e => structuredClone(e)) }
 

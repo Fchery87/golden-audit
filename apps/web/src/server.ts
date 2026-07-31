@@ -85,6 +85,7 @@ type ConsumerConsentBody = {
   residence: string
   analysisJurisdiction: string
 }
+type ConsumerAuthorizationBody = { version: string; accepted: boolean }
 type UploadInitBody = { workspaceId: string }
 type UploadCompleteBody = { uploadId: string; token: string; fileName: string; mediaType: string; contentBase64: string }
 type AnalysisKickoffBody = { jurisdiction?: string; autoConfirmSimpleMatches?: boolean }
@@ -244,9 +245,12 @@ async function handleConsent(request: IncomingMessage, response: ServerResponse)
 
 async function handleAuthorization(request: IncomingMessage, response: ServerResponse): Promise<void> {
   const sessionId = getSessionId(request)
-  const authorization = await platform.acceptAuthorization(sessionId)
+  const body = await readJsonBody(request) as Partial<ConsumerAuthorizationBody>
+  const authorization = await platform.acceptAuthorization(sessionId, body.version && body.accepted !== undefined ? { version: body.version, accepted: body.accepted } : undefined)
   respondJson(response, 201, authorization)
 }
+async function handleDisclosure(_request: IncomingMessage, response: ServerResponse): Promise<void> { respondJson(response, 200, platform.getDisclosure()) }
+async function handleDashboard(request: IncomingMessage, response: ServerResponse): Promise<void> { respondJson(response, 200, await platform.getConsumerDashboard(getSessionId(request))) }
 
 async function handleUploadInit(request: IncomingMessage, response: ServerResponse): Promise<void> {
   const sessionId = getSessionId(request)
@@ -313,8 +317,8 @@ async function handleGetExport(request: IncomingMessage, response: ServerRespons
  *  unenforceable — requestDeletion existed but no route ever called it. */
 async function handleDeletion(request: IncomingMessage, response: ServerResponse): Promise<void> {
   const sessionId = getSessionId(request)
-  const job = await platform.requestDeletion(sessionId)
-  respondJson(response, 201, job)
+  const receipt = await platform.requestDeletion(sessionId)
+  respondJson(response, 201, receipt, { 'set-cookie': clearSessionCookieHeader() })
 }
 
 async function handlePasswordResetRequest(request: IncomingMessage, response: ServerResponse): Promise<void> {
@@ -345,13 +349,14 @@ async function handleVerifyEmail(request: IncomingMessage, response: ServerRespo
 const server = createServer(async (request, response) => {
   try {
     const url = new URL(request.url ?? '/', `http://${request.headers.host ?? '127.0.0.1'}`)
+    const path = url.pathname.startsWith('/api/') ? url.pathname.slice(4) : url.pathname
 
-    if (request.method === 'GET' && url.pathname === '/health') {
+    if (request.method === 'GET' && path === '/health') {
       respondJson(response, 200, createHealthStatus('web'))
       return
     }
 
-    if (request.method === 'GET' && url.pathname === '/pilot-availability') {
+    if (request.method === 'GET' && path === '/pilot-availability') {
       if (!launchScope) {
         respondJson(response, 503, {
           status: 'launch-scope-missing',
@@ -367,7 +372,7 @@ const server = createServer(async (request, response) => {
       return
     }
 
-    if (request.method === 'GET' && url.pathname === '/') {
+    if (request.method === 'GET' && path === '/') {
       respondJson(response, 200, {
         service: 'web',
         onboarding: onboardingPayload(launchScope),
@@ -375,52 +380,54 @@ const server = createServer(async (request, response) => {
       return
     }
 
-    if (request.method === 'GET' && url.pathname === '/app') {
+    if (request.method === 'GET' && (path === '/app' || path === '/debug')) {
       serveClientIndex(response)
       return
     }
 
-    if (request.method === 'GET' && url.pathname.startsWith('/assets/')) {
-      serveStaticAsset(response, url.pathname.slice(1))
+    if (request.method === 'GET' && path.startsWith('/assets/')) {
+      serveStaticAsset(response, path.slice(1))
       return
     }
 
-    if (request.method === 'POST' && url.pathname === '/consumer/register') return await handleRegister(request, response)
-    if (request.method === 'POST' && url.pathname === '/consumer/sign-in') return await handleSignIn(request, response)
-    if (request.method === 'POST' && url.pathname === '/consumer/sign-out') return await handleSignOut(request, response)
-    if (request.method === 'POST' && url.pathname === '/consumer/password-reset/request') return await handlePasswordResetRequest(request, response)
-    if (request.method === 'POST' && url.pathname === '/consumer/password-reset/confirm') return await handlePasswordResetConfirm(request, response)
-    if (request.method === 'POST' && url.pathname === '/consumer/email-verification/request') return await handleEmailVerificationRequest(request, response)
-    if (request.method === 'POST' && url.pathname === '/consumer/email-verification/confirm') return await handleVerifyEmail(request, response)
-    if (request.method === 'POST' && url.pathname === '/consumer/consent') return await handleConsent(request, response)
-    if (request.method === 'POST' && url.pathname === '/consumer/authorization') return await handleAuthorization(request, response)
-    if (request.method === 'POST' && url.pathname === '/consumer/uploads/init') return await handleUploadInit(request, response)
-    if (request.method === 'POST' && url.pathname === '/consumer/uploads/complete') return await handleUploadComplete(request, response)
-    if (request.method === 'POST' && url.pathname === '/consumer/deletion') return await handleDeletion(request, response)
+    if (request.method === 'GET' && path === '/consumer/disclosures') return await handleDisclosure(request, response)
+    if (request.method === 'GET' && path === '/consumer/dashboard') return await handleDashboard(request, response)
+    if (request.method === 'POST' && path === '/consumer/register') return await handleRegister(request, response)
+    if (request.method === 'POST' && path === '/consumer/sign-in') return await handleSignIn(request, response)
+    if (request.method === 'POST' && path === '/consumer/sign-out') return await handleSignOut(request, response)
+    if (request.method === 'POST' && path === '/consumer/password-reset/request') return await handlePasswordResetRequest(request, response)
+    if (request.method === 'POST' && path === '/consumer/password-reset/confirm') return await handlePasswordResetConfirm(request, response)
+    if (request.method === 'POST' && path === '/consumer/email-verification/request') return await handleEmailVerificationRequest(request, response)
+    if (request.method === 'POST' && path === '/consumer/email-verification/confirm') return await handleVerifyEmail(request, response)
+    if (request.method === 'POST' && path === '/consumer/consent') return await handleConsent(request, response)
+    if (request.method === 'POST' && path === '/consumer/authorization') return await handleAuthorization(request, response)
+    if (request.method === 'POST' && path === '/consumer/uploads/init') return await handleUploadInit(request, response)
+    if (request.method === 'POST' && path === '/consumer/uploads/complete') return await handleUploadComplete(request, response)
+    if (request.method === 'POST' && path === '/consumer/deletion') return await handleDeletion(request, response)
 
-    const kickoffMatch = request.method === 'POST' ? url.pathname.match(/^\/consumer\/uploads\/([^/]+)\/kickoff-analysis$/) : null
+    const kickoffMatch = request.method === 'POST' ? path.match(/^\/consumer\/uploads\/([^/]+)\/kickoff-analysis$/) : null
     if (kickoffMatch) return await handleKickoffAnalysis(request, response, kickoffMatch[1] ?? '')
 
-    const subgroupMatch = request.method === 'POST' ? url.pathname.match(/^\/consumer\/matches\/([^/]+)\/confirm-subgroup$/) : null
+    const subgroupMatch = request.method === 'POST' ? path.match(/^\/consumer\/matches\/([^/]+)\/confirm-subgroup$/) : null
     if (subgroupMatch) return await handleMatchSubgroup(request, response, subgroupMatch[1] ?? '')
 
-    const completeAnalysisMatch = request.method === 'POST' ? url.pathname.match(/^\/consumer\/reports\/([^/]+)\/complete-analysis$/) : null
+    const completeAnalysisMatch = request.method === 'POST' ? path.match(/^\/consumer\/reports\/([^/]+)\/complete-analysis$/) : null
     if (completeAnalysisMatch) return await handleCompleteAnalysis(request, response, completeAnalysisMatch[1] ?? '')
 
-    const decisionMatch = request.method === 'POST' ? url.pathname.match(/^\/consumer\/matches\/([^/]+)\/decision$/) : null
+    const decisionMatch = request.method === 'POST' ? path.match(/^\/consumer\/matches\/([^/]+)\/decision$/) : null
     if (decisionMatch) return await handleMatchDecision(request, response, decisionMatch[1] ?? '')
 
-    const analysisMatch = request.method === 'GET' ? url.pathname.match(/^\/consumer\/analyses\/([^/]+)$/) : null
+    const analysisMatch = request.method === 'GET' ? path.match(/^\/consumer\/analyses\/([^/]+)$/) : null
     if (analysisMatch) return await handleGetAnalysis(request, response, analysisMatch[1] ?? '')
 
-    const consumerReportMatch = request.method === 'GET' ? url.pathname.match(/^\/consumer\/reports\/([^/]+)$/) : null
+    const consumerReportMatch = request.method === 'GET' ? path.match(/^\/consumer\/reports\/([^/]+)$/) : null
     if (consumerReportMatch) return await handleGetConsumerReport(request, response, consumerReportMatch[1] ?? '')
 
-    const exportMatch = request.method === 'GET' ? url.pathname.match(/^\/consumer\/exports\/([^/]+)$/) : null
+    const exportMatch = request.method === 'GET' ? path.match(/^\/consumer\/exports\/([^/]+)$/) : null
     if (exportMatch) return await handleGetExport(request, response, exportMatch[1] ?? '')
 
-    if (request.method === 'GET' && extname(url.pathname)) {
-      serveStaticAsset(response, url.pathname.slice(1))
+    if (request.method === 'GET' && extname(path)) {
+      serveStaticAsset(response, path.slice(1))
       return
     }
 

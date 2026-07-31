@@ -47,6 +47,7 @@ export class D1PlatformStore implements PlatformStore {
       `CREATE TABLE IF NOT EXISTS consumer_reports (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, analysis_id TEXT NOT NULL, payload_json TEXT NOT NULL)`,
       `CREATE TABLE IF NOT EXISTS exports (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, report_id TEXT NOT NULL, payload_json TEXT NOT NULL, created_at TEXT NOT NULL)`,
       `CREATE TABLE IF NOT EXISTS deletion_jobs (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, payload_json TEXT NOT NULL)`,
+      `CREATE TABLE IF NOT EXISTS deletion_receipts (id TEXT PRIMARY KEY, completed_at TEXT NOT NULL, outcome TEXT NOT NULL)`,
       `CREATE TABLE IF NOT EXISTS audit_events (id TEXT PRIMARY KEY, actor_id TEXT NOT NULL, subject_id TEXT NOT NULL, event_type TEXT NOT NULL, occurred_at TEXT NOT NULL, metadata_json TEXT NOT NULL)`,
       `CREATE INDEX IF NOT EXISTS idx_audit_events_actor_id ON audit_events(actor_id)`,
       `CREATE TABLE IF NOT EXISTS invites (code TEXT PRIMARY KEY, created_at TEXT NOT NULL, used_at TEXT, used_by_user_id TEXT)`,
@@ -90,6 +91,7 @@ export class D1PlatformStore implements PlatformStore {
   }
 
   async getWorkspace(id: Id) { const row = await this.first<{ id: string; user_id: string; created_at: string }>('SELECT id, user_id, created_at FROM workspaces WHERE id = ?', id); return row ? { id: row.id, userId: row.user_id, createdAt: row.created_at } as Workspace : undefined }
+  async listWorkspacesForUser(userId: Id) { const rows = await this.all<{ id: string; user_id: string; created_at: string }>('SELECT id, user_id, created_at FROM workspaces WHERE user_id = ? ORDER BY created_at DESC', userId); return rows.map(row => ({ id: row.id, userId: row.user_id, createdAt: row.created_at }) as Workspace) }
   async createWorkspace(workspace: Workspace) { await this.run('INSERT INTO workspaces (id, user_id, created_at) VALUES (?, ?, ?)', workspace.id, workspace.userId, workspace.createdAt) }
 
   async getAuthorizationByUser(userId: Id) { const row = await this.first<{ payload_json: string }>('SELECT payload_json FROM authorizations WHERE user_id = ? ORDER BY rowid DESC LIMIT 1', userId); return row ? JSON.parse(row.payload_json) as AuthorizationRecord : undefined }
@@ -115,6 +117,7 @@ export class D1PlatformStore implements PlatformStore {
   async saveAnalysis(analysis: Analysis) { await this.run('INSERT INTO analyses (id, user_id, report_id, payload_json) VALUES (?, ?, ?, ?)', analysis.id, analysis.userId, analysis.reportId, JSON.stringify(analysis)) }
 
   async getConsumerReport(id: Id) { const row = await this.first<{ payload_json: string }>('SELECT payload_json FROM consumer_reports WHERE id = ?', id); return row ? JSON.parse(row.payload_json) as ConsumerReport : undefined }
+  async listConsumerReportsForUser(userId: Id) { const rows = await this.all<{ payload_json: string }>('SELECT payload_json FROM consumer_reports WHERE user_id = ? ORDER BY rowid DESC', userId); return rows.map(row => JSON.parse(row.payload_json) as ConsumerReport) }
   async saveConsumerReport(report: ConsumerReport) { await this.run('INSERT INTO consumer_reports (id, user_id, analysis_id, payload_json) VALUES (?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET payload_json = excluded.payload_json', report.id, report.userId, report.analysisId, JSON.stringify(report)) }
 
   async getExport(id: Id) { const row = await this.first<{ payload_json: string }>('SELECT payload_json FROM exports WHERE id = ?', id); return row ? JSON.parse(row.payload_json) as ExportArtifact : undefined }
@@ -122,6 +125,7 @@ export class D1PlatformStore implements PlatformStore {
   async findExportByReport(userId: Id, reportId: Id) { const row = await this.first<{ payload_json: string }>('SELECT payload_json FROM exports WHERE user_id = ? AND report_id = ? LIMIT 1', userId, reportId); return row ? JSON.parse(row.payload_json) as ExportArtifact : undefined }
 
   async saveDeletionJob(job: DeletionJob) { await this.run('INSERT INTO deletion_jobs (id, user_id, payload_json) VALUES (?, ?, ?)', job.id, job.userId, JSON.stringify(job)) }
+  async saveDeletionReceipt(receipt: { id: Id; completedAt: string; outcome: 'account-deleted' }) { await this.run('INSERT INTO deletion_receipts (id, completed_at, outcome) VALUES (?, ?, ?)', receipt.id, receipt.completedAt, receipt.outcome) }
   async deleteAllUserData(userId: Id): Promise<string[]> {
     const deleted: string[] = []
     const uploads = await this.all<{ id: string }>('SELECT id FROM uploads WHERE user_id = ?', userId)
@@ -145,6 +149,10 @@ export class D1PlatformStore implements PlatformStore {
     await this.run('DELETE FROM consumer_reports WHERE user_id = ?', userId)
     await this.run('DELETE FROM exports WHERE user_id = ?', userId)
     return deleted
+  }
+  async deleteAccount(userId: Id) {
+    for (const statement of ['DELETE FROM sessions WHERE user_id = ?', 'DELETE FROM workspaces WHERE user_id = ?', 'DELETE FROM authorizations WHERE user_id = ?', 'DELETE FROM auth_tokens WHERE user_id = ?', 'DELETE FROM deletion_jobs WHERE user_id = ?', 'DELETE FROM users WHERE id = ?']) await this.run(statement, userId)
+    await this.run('DELETE FROM audit_events WHERE actor_id = ? OR subject_id = ?', userId, userId)
   }
 
   async appendAuditEvent(event: AuditEvent & { id: Id }) { await this.run('INSERT INTO audit_events (id, actor_id, subject_id, event_type, occurred_at, metadata_json) VALUES (?, ?, ?, ?, ?, ?)', event.id, event.actorId, event.subjectId, event.type, event.at, JSON.stringify(event.metadata)) }

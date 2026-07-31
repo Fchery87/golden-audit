@@ -42,6 +42,7 @@ export class SqlitePlatformStore implements PlatformStore {
       CREATE TABLE IF NOT EXISTS consumer_reports (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, analysis_id TEXT NOT NULL, payload_json TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS exports (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, report_id TEXT NOT NULL, payload_json TEXT NOT NULL, created_at TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS deletion_jobs (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, payload_json TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS deletion_receipts (id TEXT PRIMARY KEY, completed_at TEXT NOT NULL, outcome TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS audit_events (id TEXT PRIMARY KEY, actor_id TEXT NOT NULL, subject_id TEXT NOT NULL, event_type TEXT NOT NULL, occurred_at TEXT NOT NULL, metadata_json TEXT NOT NULL);
       CREATE INDEX IF NOT EXISTS idx_audit_events_actor_id ON audit_events(actor_id);
       CREATE TABLE IF NOT EXISTS invites (code TEXT PRIMARY KEY, created_at TEXT NOT NULL, used_at TEXT, used_by_user_id TEXT);
@@ -71,6 +72,7 @@ export class SqlitePlatformStore implements PlatformStore {
   }
 
   async getWorkspace(id: Id) { const row = this.db.prepare('SELECT id, user_id, created_at FROM workspaces WHERE id = ?').get(id) as { id: string; user_id: string; created_at: string } | undefined; return row ? { id: row.id, userId: row.user_id, createdAt: row.created_at } as Workspace : undefined }
+  async listWorkspacesForUser(userId: Id) { const rows = this.db.prepare('SELECT id, user_id, created_at FROM workspaces WHERE user_id = ? ORDER BY created_at DESC').all(userId) as Array<{ id: string; user_id: string; created_at: string }>; return rows.map(row => ({ id: row.id, userId: row.user_id, createdAt: row.created_at }) as Workspace) }
   async createWorkspace(workspace: Workspace) { this.db.prepare('INSERT INTO workspaces (id, user_id, created_at) VALUES (?, ?, ?)').run(workspace.id, workspace.userId, workspace.createdAt) }
 
   async getAuthorizationByUser(userId: Id) { const row = this.db.prepare('SELECT payload_json FROM authorizations WHERE user_id = ? ORDER BY rowid DESC LIMIT 1').get(userId) as { payload_json: string } | undefined; return row ? JSON.parse(row.payload_json) as AuthorizationRecord : undefined }
@@ -91,6 +93,7 @@ export class SqlitePlatformStore implements PlatformStore {
   async saveAnalysis(analysis: Analysis) { this.db.prepare('INSERT INTO analyses (id, user_id, report_id, payload_json) VALUES (?, ?, ?, ?)').run(analysis.id, analysis.userId, analysis.reportId, JSON.stringify(analysis)) }
 
   async getConsumerReport(id: Id) { const row = this.db.prepare('SELECT payload_json FROM consumer_reports WHERE id = ?').get(id) as { payload_json: string } | undefined; return row ? JSON.parse(row.payload_json) as ConsumerReport : undefined }
+  async listConsumerReportsForUser(userId: Id) { const rows = this.db.prepare('SELECT payload_json FROM consumer_reports WHERE user_id = ? ORDER BY rowid DESC').all(userId) as Array<{ payload_json: string }>; return rows.map(row => JSON.parse(row.payload_json) as ConsumerReport) }
   async saveConsumerReport(report: ConsumerReport) { this.db.prepare('INSERT INTO consumer_reports (id, user_id, analysis_id, payload_json) VALUES (?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET payload_json = excluded.payload_json').run(report.id, report.userId, report.analysisId, JSON.stringify(report)) }
 
   async getExport(id: Id) { const row = this.db.prepare('SELECT payload_json FROM exports WHERE id = ?').get(id) as { payload_json: string } | undefined; return row ? JSON.parse(row.payload_json) as ExportArtifact : undefined }
@@ -98,6 +101,7 @@ export class SqlitePlatformStore implements PlatformStore {
   async findExportByReport(userId: Id, reportId: Id) { const row = this.db.prepare('SELECT payload_json FROM exports WHERE user_id = ? AND report_id = ? LIMIT 1').get(userId, reportId) as { payload_json: string } | undefined; return row ? JSON.parse(row.payload_json) as ExportArtifact : undefined }
 
   async saveDeletionJob(job: DeletionJob) { this.db.prepare('INSERT INTO deletion_jobs (id, user_id, payload_json) VALUES (?, ?, ?)').run(job.id, job.userId, JSON.stringify(job)) }
+  async saveDeletionReceipt(receipt: { id: Id; completedAt: string; outcome: 'account-deleted' }) { this.db.prepare('INSERT INTO deletion_receipts (id, completed_at, outcome) VALUES (?, ?, ?)').run(receipt.id, receipt.completedAt, receipt.outcome) }
   async deleteAllUserData(userId: Id): Promise<string[]> {
     const deleted: string[] = []
     const uploads = this.db.prepare('SELECT id FROM uploads WHERE user_id = ?').all(userId) as Array<{ id: string }>
@@ -121,6 +125,19 @@ export class SqlitePlatformStore implements PlatformStore {
     this.db.prepare('DELETE FROM consumer_reports WHERE user_id = ?').run(userId)
     this.db.prepare('DELETE FROM exports WHERE user_id = ?').run(userId)
     return deleted
+  }
+  async deleteAccount(userId: Id) {
+    this.db.exec('BEGIN')
+    try {
+      this.db.prepare('DELETE FROM sessions WHERE user_id = ?').run(userId)
+      this.db.prepare('DELETE FROM workspaces WHERE user_id = ?').run(userId)
+      this.db.prepare('DELETE FROM authorizations WHERE user_id = ?').run(userId)
+      this.db.prepare('DELETE FROM auth_tokens WHERE user_id = ?').run(userId)
+      this.db.prepare('DELETE FROM audit_events WHERE actor_id = ? OR subject_id = ?').run(userId, userId)
+      this.db.prepare('DELETE FROM deletion_jobs WHERE user_id = ?').run(userId)
+      this.db.prepare('DELETE FROM users WHERE id = ?').run(userId)
+      this.db.exec('COMMIT')
+    } catch (error) { this.db.exec('ROLLBACK'); throw error }
   }
 
   async appendAuditEvent(event: AuditEvent & { id: Id }) { this.db.prepare('INSERT INTO audit_events (id, actor_id, subject_id, event_type, occurred_at, metadata_json) VALUES (?, ?, ?, ?, ?, ?)').run(event.id, event.actorId, event.subjectId, event.type, event.at, JSON.stringify(event.metadata)) }
