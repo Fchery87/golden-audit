@@ -15,6 +15,10 @@ export type CompleteAnalysisResult = { status: 'analysis-complete'; reportId: st
 export type KickoffResult = { status: 'analysis-complete' | 'match-review-required'; reportId: string; matches: MatchGroupSummary[]; tradelines?: TradelineSummary[]; analysisId?: string; consumerReportId?: string; exportId?: string }
 export type AnalysisFinding = { id: string; title: string; severity: string; confidence: number; limitations?: string[] }
 export type ConsumerReport = { id: string; analysisId: string; limitations: string[]; overview: Record<string, number>; generatedAt?: string; findings: Array<Omit<AnalysisFinding, 'limitations'> & { limitations: string[]; classification: string; evidence: Array<{ field: string; value: string | number | null; source: { page?: number; locator?: string; originalDisplay?: string } }>; alternativeExplanations: string[]; suggestedAction: string; verificationDocuments: string[]; educationModules: Array<{ id: string; title: string; body: string; limitations: string[] }>; authorities: Array<{ id: string; title: string; sourceUrl: string; citation: string }> }>; content?: { catalogVersion: string; rulesetVersion: string; parserVersion: string; sectionPrimers: Array<{ id: string; title: string; body: string; limitations: string[]; authorityIds: string[]; authorities: Array<{ id: string; title: string; sourceUrl: string; citation: string }> }>; coverage: Array<{ ruleId: string; name: string; requiredInputs: string[]; outcomes: Array<{ outcome: string; reason: string }> }>; parserFields: Array<{ field: string; capability: 'supported' | 'planned'; states: Record<string, number> }> } }
+export type PasswordResetRequestResult = { status: 'if-account-exists-reset-issued' }
+export type PasswordResetConfirmResult = { status: 'password-reset' }
+export type EmailVerificationRequestResult = { status: 'verification-issued' }
+export type EmailVerificationConfirmResult = { status: 'email-verified' }
 export type ExportArtifact = { id: string; reportId: string; content: string; formatVersion?: string }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -36,6 +40,10 @@ export const api = {
   getDashboard: () => request<ConsumerDashboard>('/consumer/dashboard'),
   consent: (residence: string, analysisJurisdiction: string) => post<ConsentResult>('/consumer/consent', { version: '2026-01', adultUSConsumer: true, authorizedReportUse: true, educationalLimitations: true, sensitiveDataHandling: true, residence, analysisJurisdiction }),
   acceptAuthorization: (version: string, accepted: boolean) => post<AuthorizationResult>('/consumer/authorization', { version, accepted }),
+  requestPasswordReset: (email: string) => post<PasswordResetRequestResult>('/consumer/password-reset/request', { email }),
+  confirmPasswordReset: (token: string, newPassword: string) => post<PasswordResetConfirmResult>('/consumer/password-reset/confirm', { token, newPassword }),
+  requestEmailVerification: () => post<EmailVerificationRequestResult>('/consumer/email-verification/request', {}),
+  confirmEmailVerification: (token: string) => post<EmailVerificationConfirmResult>('/consumer/email-verification/confirm', { token }),
   requestDeletion: () => post<DeletionResult>('/consumer/deletion', {}),
   initUpload: (workspaceId: string) => post<UploadInitResult>('/consumer/uploads/init', { workspaceId }),
   completeUpload: (input: { uploadId: string; token: string; fileName: string; mediaType: string; contentBase64: string }) => post<UploadCompleteResult>('/consumer/uploads/complete', input),

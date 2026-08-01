@@ -10,7 +10,7 @@
 | `Cloudflare R2` | storage / backup | raw PDFs, exports, backups, large object files | not started | `[TBD]` | Cloudflare bucket object deletion lifecycle and bucket teardown path to be documented during vendor review | no | no | Ops / Security | Active pilot object/file storage choice. Bucket name: `golden-audit-pilot-uploads`. |
 | `Cloudflare D1` | structured app state / database | account/session data, consent records, audit indexes, evidence metadata, normalized metadata | not started | `[TBD]` | Cloudflare D1 data deletion / database teardown path to be documented during vendor review | no | no | Security / Ops | Active pilot structured data store. Database name: `golden-audit-pilot`. Database id: `e24d3d92-0f9d-4cf1-a31f-f47b733e3432`. Remote migration `003_pilot_pages_state` verified 2026-07-31. |
 | `[TBD monitoring provider]` | monitoring / security telemetry | runtime metadata, redacted logs, alerts | not started | `[TBD]` | `[TBD]` | no | no | Security | Must preserve telemetry redaction posture |
-| `[TBD transactional email provider]` | transactional communication | account email, limited account metadata | not started | `[TBD]` | `[TBD]` | no | no | Ops / Privacy | Only if used in the pilot surface |
+| `Cloudflare Email Service` | transactional account email | account email; one-hour, single-use password-reset or verification token carried only in the email link | not started | `[TBD]` | Cloudflare Email Service retention/deletion terms and account/project teardown path to be documented during vendor review | no | no | Ops / Privacy | D10 implementation uses an `EMAIL` Pages binding. Must not be enabled for real consumers until the verified sender domain, DPA/contract, privacy review, and deployment checklist are complete. See `docs/cloudflare-email-service-checklist.md`. |
 | `[Optional narration/model provider]` | model / narration | constrained findings payload, generated summary | not started | `[TBD]` | delayed lifecycle / provider deletion path | no | no | Security / Vendor | Keep disabled until approved and contractually reviewed |
 
 ## Required categories to review
@@ -30,6 +30,6 @@
 - data residency review where applicable
 
 ## Notes
-- Review `docs/cloudflare-pages-d1-r2-setup.md` before replacing the placeholder Cloudflare resource values in this working inventory.
+- Review `docs/cloudflare-pages-d1-r2-setup.md` and `docs/cloudflare-email-service-checklist.md` before enabling the Email Sending binding or replacing placeholder Cloudflare resource values in this working inventory.
 - Monitoring, incident contact, deletion / return commitments, subprocessors review, and data residency review still require accountable-owner completion during vendor review.
 - Do not treat this as vendor approval; it is only the working inventory needed before vendor review can sign off.

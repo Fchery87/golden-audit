@@ -1,10 +1,12 @@
 import type { D1Database } from '@cloudflare/workers-types'
-import { randomUUID } from 'node:crypto'
+import { randomUUID, createHash } from 'node:crypto'
 import type {
   Id, User, Session, Workspace, AuthorizationRecord, Upload, CanonicalReport,
   MatchGroup, Analysis, ConsumerReport, ExportArtifact, DeletionJob, AuditEvent,
   PlatformStore, Consent,
 } from '../../../../packages/platform/src/index.js'
+
+const authTokenHash = (token: string): string => createHash('sha256').update(token).digest('hex')
 
 /**
  * D1-backed PlatformStore (docs/consumer-workflow-implementation-plan.md D5). Replaces the
@@ -183,15 +185,13 @@ export class D1PlatformStore implements PlatformStore {
     return result.changes > 0
   }
 
-  async createToken(kind: 'password-reset' | 'email-verify', token: string, userId: Id, expiresAt: string) { await this.run('INSERT INTO auth_tokens (token, kind, user_id, expires_at) VALUES (?, ?, ?, ?)', token, kind, userId, expiresAt) }
+  async createToken(kind: 'password-reset' | 'email-verify', token: string, userId: Id, expiresAt: string) { await this.run('INSERT INTO auth_tokens (token, kind, user_id, expires_at) VALUES (?, ?, ?, ?)', authTokenHash(token), kind, userId, expiresAt) }
   async consumeToken(kind: 'password-reset' | 'email-verify', token: string) {
-    // Atomic single-use check, same pattern as consumeInvite: the WHERE clause only matches an
-    // unconsumed token, so meta.changes tells us whether this call is the one that consumed it.
-    const result = await this.run('UPDATE auth_tokens SET consumed_at = ? WHERE token = ? AND kind = ? AND consumed_at IS NULL', new Date().toISOString(), token, kind)
-    if (result.changes === 0) return undefined
-    const row = await this.first<{ user_id: string; expires_at: string }>('SELECT user_id, expires_at FROM auth_tokens WHERE token = ?', token)
+    const tokenHash = authTokenHash(token)
+    const row = await this.first<{ user_id: string; expires_at: string }>('SELECT user_id, expires_at FROM auth_tokens WHERE token = ? AND kind = ? AND consumed_at IS NULL', tokenHash, kind)
     if (!row || Date.parse(row.expires_at) <= Date.now()) return undefined
-    return { userId: row.user_id }
+    const result = await this.run('UPDATE auth_tokens SET consumed_at = ? WHERE token = ? AND kind = ? AND consumed_at IS NULL', new Date().toISOString(), tokenHash, kind)
+    return result.changes === 1 ? { userId: row.user_id } : undefined
   }
 }
 

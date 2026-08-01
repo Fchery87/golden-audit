@@ -320,6 +320,13 @@ The highest-uncertainty item gated the most work, so it went first.
 - D1 decision: **no re-aging or DOFD Finding in this slice.** A single report cannot show a date moving over time. A later longitudinal feature must provide reliable cross-report account matching, human-reviewed educational content, explicit alternative explanations, and verification guidance before any potential movement observation is considered.
 - The authorized four local PDFs are unavailable in this checkout, so their required structural/availability validation remains a release-evidence task; no claim of successful real-sample extraction is made.
 
+### Phase 6 — Account recovery delivery — implementation complete; deployment approval pending
+
+- D10’s existing invite gate, secure cookie sessions, expiry/rotation controls, and rate-limit binding are now paired with Cloudflare Email Service delivery for password reset and email verification.
+- The application uses a typed `EMAIL` binding with a configured HTTPS application URL and verified sender address; reset requests remain account-enumeration safe and link tokens are not logged.
+- Browser recovery and email-verification screens are provided. The Node development server can use a local, access-restricted scratch outbox only when explicitly configured; it never sends real email by default.
+- The Cloudflare sender domain, Email Service review/DPA, WAF configuration, preview delivery validation, and privacy/counsel approval remain required release operations; see `docs/cloudflare-email-service-checklist.md`.
+
 ---
 
 ## Part 5 — Documents to update

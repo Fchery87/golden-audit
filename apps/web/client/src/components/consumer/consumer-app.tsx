@@ -8,6 +8,7 @@ import { api, type ConsumerDashboard, type ConsumerReport, type Disclosure, type
 
 const emptyAuth = { email: '', password: '', inviteCode: '' }
 type AuthMode = 'sign-in' | 'register'
+type AccessPanel = 'credentials' | 'forgot-password' | 'reset-password' | 'verify-email'
 
 export function ConsumerApp() {
   const [dashboard, setDashboard] = React.useState<ConsumerDashboard | null>(null)
@@ -47,6 +48,11 @@ export function ConsumerApp() {
     } catch (cause) { setError(cause instanceof Error ? cause.message : 'Unable to load report') }
   }
 
+  const accessParameters = new URLSearchParams(window.location.search)
+  const resetToken = accessParameters.get('resetToken')
+  const verificationToken = accessParameters.get('verifyEmailToken')
+  if (resetToken !== null) return <PasswordResetConfirm token={resetToken} onComplete={() => { setDashboard(null); setReport(null) }} />
+  if (verificationToken !== null) return <EmailVerificationConfirm token={verificationToken} onComplete={() => void refresh()} />
   if (loading) return <p className="flex items-center gap-2 py-20 text-sm text-muted-foreground" role="status"><Loader2 className="h-4 w-4 animate-spin" /> Loading your account…</p>
   if (!dashboard) return <AuthScreen onAuthenticated={refresh} />
 
@@ -64,6 +70,12 @@ export function ConsumerApp() {
 
 function AuthScreen({ onAuthenticated }: { onAuthenticated: () => Promise<void> }) {
   const [mode, setMode] = React.useState<AuthMode>('sign-in')
+  const [panel, setPanel] = React.useState<AccessPanel>(() => {
+    const parameters = new URLSearchParams(window.location.search)
+    if (parameters.has('resetToken')) return 'reset-password'
+    if (parameters.has('verifyEmailToken')) return 'verify-email'
+    return 'credentials'
+  })
   const [form, setForm] = React.useState(emptyAuth)
   const [busy, setBusy] = React.useState(false)
   const [error, setError] = React.useState<string | null>(null)
@@ -77,6 +89,10 @@ function AuthScreen({ onAuthenticated }: { onAuthenticated: () => Promise<void> 
       await onAuthenticated()
     } catch (cause) { setError(cause instanceof Error ? cause.message : 'Unable to continue') } finally { setBusy(false) }
   }
+
+  if (panel === 'forgot-password') return <PasswordResetRequest onBack={() => setPanel('credentials')} />
+  if (panel === 'reset-password') return <PasswordResetConfirm token={new URLSearchParams(window.location.search).get('resetToken') ?? ''} onComplete={() => setPanel('credentials')} />
+  if (panel === 'verify-email') return <EmailVerificationConfirm token={new URLSearchParams(window.location.search).get('verifyEmailToken') ?? ''} onComplete={() => setPanel('credentials')} />
 
   return <section className="py-10 sm:py-16" aria-labelledby="access-heading">
     <h1 id="access-heading" className="font-serif text-3xl tracking-tight sm:text-4xl">Review your credit report with care.</h1>
@@ -92,8 +108,27 @@ function AuthScreen({ onAuthenticated }: { onAuthenticated: () => Promise<void> 
       </div>
       {error && <p className="mt-5 text-sm text-negative" role="alert">{error}</p>}
       <Button className="mt-7" type="submit" disabled={busy}>{busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <LogIn className="h-4 w-4" />}{register ? 'Create account' : 'Sign in'}</Button>
+      {!register && <button type="button" className="ml-4 text-sm underline underline-offset-4" onClick={() => { setPanel('forgot-password'); setError(null) }}>Forgot password?</button>}
     </form>
   </section>
+}
+
+function PasswordResetRequest({ onBack }: { onBack: () => void }) {
+  const [email, setEmail] = React.useState(''); const [busy, setBusy] = React.useState(false); const [submitted, setSubmitted] = React.useState(false); const [error, setError] = React.useState<string | null>(null)
+  async function submit(event: React.FormEvent) { event.preventDefault(); setBusy(true); setError(null); try { await api.requestPasswordReset(email); setSubmitted(true) } catch (cause) { setError(cause instanceof Error ? cause.message : 'Unable to request a reset') } finally { setBusy(false) } }
+  return <section className="py-10 sm:py-16"><h1 className="font-serif text-3xl tracking-tight">Reset your password.</h1>{submitted ? <div className="mt-8 max-w-lg border border-rule bg-paper p-6"><p>If an account matches that email, we sent a password-reset link.</p><Button className="mt-6" variant="outline" onClick={onBack}>Back to sign in</Button></div> : <form className="mt-8 max-w-lg border border-rule bg-paper p-6" onSubmit={submit}><p className="text-sm text-muted-foreground">Enter your account email. For privacy, this screen shows the same result whether or not an account exists.</p><Label className="mt-6">Email<Input required type="email" autoComplete="email" value={email} onChange={event => setEmail(event.target.value)} /></Label>{error && <p className="mt-4 text-sm text-negative" role="alert">{error}</p>}<div className="mt-6 flex gap-3"><Button type="submit" disabled={busy}>{busy && <Loader2 className="h-4 w-4 animate-spin" />}Send reset link</Button><Button type="button" variant="outline" onClick={onBack}>Cancel</Button></div></form>}</section>
+}
+
+function PasswordResetConfirm({ token, onComplete }: { token: string; onComplete: () => void }) {
+  const [password, setPassword] = React.useState(''); const [busy, setBusy] = React.useState(false); const [done, setDone] = React.useState(false); const [error, setError] = React.useState<string | null>(null)
+  async function submit(event: React.FormEvent) { event.preventDefault(); if (!token) { setError('This reset link is incomplete. Request a new one.'); return }; setBusy(true); setError(null); try { await api.confirmPasswordReset(token, password); setDone(true); window.history.replaceState({}, '', '/app') } catch (cause) { setError(cause instanceof Error ? cause.message : 'Unable to reset password') } finally { setBusy(false) } }
+  return <section className="py-10 sm:py-16"><h1 className="font-serif text-3xl tracking-tight">Choose a new password.</h1>{done ? <div className="mt-8 max-w-lg border border-rule bg-paper p-6"><p>Your password was reset. Existing sessions were signed out.</p><Button className="mt-6" onClick={onComplete}>Sign in</Button></div> : <form className="mt-8 max-w-lg border border-rule bg-paper p-6" onSubmit={submit}><Label>New password<Input required minLength={12} type="password" autoComplete="new-password" value={password} onChange={event => setPassword(event.target.value)} /></Label><p className="mt-3 text-sm text-muted-foreground">Use at least 12 characters.</p>{error && <p className="mt-4 text-sm text-negative" role="alert">{error}</p>}<Button className="mt-6" type="submit" disabled={busy}>{busy && <Loader2 className="h-4 w-4 animate-spin" />}Reset password</Button></form>}</section>
+}
+
+function EmailVerificationConfirm({ token, onComplete }: { token: string; onComplete: () => void }) {
+  const [busy, setBusy] = React.useState(false); const [done, setDone] = React.useState(false); const [error, setError] = React.useState<string | null>(null)
+  async function confirm() { if (!token) { setError('This verification link is incomplete.'); return }; setBusy(true); setError(null); try { await api.confirmEmailVerification(token); setDone(true); window.history.replaceState({}, '', '/app') } catch (cause) { setError(cause instanceof Error ? cause.message : 'Unable to verify email') } finally { setBusy(false) } }
+  return <section className="py-10 sm:py-16"><h1 className="font-serif text-3xl tracking-tight">Verify your email.</h1><div className="mt-8 max-w-lg border border-rule bg-paper p-6">{done ? <><p>Your email is verified.</p><Button className="mt-6" onClick={onComplete}>Continue to sign in</Button></> : <><p className="text-sm text-muted-foreground">Confirming verifies the email address associated with this account.</p>{error && <p className="mt-4 text-sm text-negative" role="alert">{error}</p>}<Button className="mt-6" onClick={() => void confirm()} disabled={busy}>{busy && <Loader2 className="h-4 w-4 animate-spin" />}Verify email</Button></>}</div></section>
 }
 
 function Onboarding({ dashboard, onRefresh, onOpenReport, onCompletedReport }: { dashboard: ConsumerDashboard; onRefresh: () => Promise<void>; onOpenReport: (id: string) => Promise<void>; onCompletedReport: (id: string) => Promise<void> }) {
@@ -128,10 +163,11 @@ function UploadStep({ workspaceId, onComplete }: { workspaceId: string | null; o
 function ReportScreen({ report, onBack }: { report: { report: ConsumerReport; exportId: string | null }; onBack: () => void }) { return <section className="mt-8"><div className="no-print mb-8 flex flex-wrap items-center justify-between gap-4"><button className="text-sm underline underline-offset-4" onClick={onBack}>Back to reports</button><ReportActions exportId={report.exportId} /></div><ReportDocument report={report.report} /></section> }
 
 function AccountPanel({ dashboard, onDeleted, onOpenReport }: { dashboard: ConsumerDashboard; onDeleted: () => void; onOpenReport: (id: string) => Promise<void> }) {
-  const [confirming, setConfirming] = React.useState(false); const [busy, setBusy] = React.useState(false); const [error, setError] = React.useState<string | null>(null)
+  const [confirming, setConfirming] = React.useState(false); const [busy, setBusy] = React.useState(false); const [error, setError] = React.useState<string | null>(null); const [verificationSent, setVerificationSent] = React.useState(false)
   async function signOut() { setBusy(true); try { await api.signOut(); onDeleted() } finally { setBusy(false) } }
+  async function requestVerification() { setBusy(true); setError(null); try { await api.requestEmailVerification(); setVerificationSent(true) } catch (cause) { setError(cause instanceof Error ? cause.message : 'Unable to send verification email') } finally { setBusy(false) } }
   async function remove() { setBusy(true); setError(null); try { await api.requestDeletion(); onDeleted() } catch (cause) { setError(cause instanceof Error ? cause.message : 'Unable to delete account') } finally { setBusy(false) } }
-  return <section className="mt-10 max-w-2xl"><h1 className="font-serif text-3xl tracking-tight">Account</h1><dl className="mt-8 divide-y divide-rule border-y border-rule"><div className="py-5"><dt className="text-sm text-muted-foreground">Email</dt><dd className="mt-1">{dashboard.email}</dd></div><div className="py-5"><dt className="text-sm text-muted-foreground">Completed reports</dt><dd className="mt-1">{dashboard.reports.length}</dd></div></dl>{dashboard.reports.length > 0 && <Button className="mt-6" variant="outline" onClick={() => void onOpenReport(dashboard.reports[0]!.id)}><FileText className="h-4 w-4" />Open latest report</Button>}<div className="mt-10 border-t border-rule pt-8"><Button variant="outline" disabled={busy} onClick={() => void signOut()}>Sign out</Button><h2 className="mt-10 font-serif text-2xl">Delete account</h2><p className="mt-3 text-sm leading-relaxed text-muted-foreground">Deleting your account removes your account, report uploads, analysis artifacts, exports, authorizations, sessions, and account-linked records. We retain only a non-identifying completion receipt for operational evidence.</p>{confirming ? <div className="mt-5 border border-negative p-5"><p className="font-medium">This cannot be undone.</p><p className="mt-2 text-sm text-muted-foreground">Your session will end immediately after deletion completes.</p>{error && <p className="mt-3 text-sm text-negative" role="alert">{error}</p>}<div className="mt-5 flex gap-3"><Button variant="outline" disabled={busy} onClick={() => void remove()}><Trash2 className="h-4 w-4" />Delete my account</Button><Button variant="outline" disabled={busy} onClick={() => setConfirming(false)}>Cancel</Button></div></div> : <Button className="mt-5" variant="outline" onClick={() => setConfirming(true)}><Trash2 className="h-4 w-4" />Delete account</Button>}</div></section>
+  return <section className="mt-10 max-w-2xl"><h1 className="font-serif text-3xl tracking-tight">Account</h1><dl className="mt-8 divide-y divide-rule border-y border-rule"><div className="py-5"><dt className="text-sm text-muted-foreground">Email</dt><dd className="mt-1">{dashboard.email}</dd></div><div className="py-5"><dt className="text-sm text-muted-foreground">Completed reports</dt><dd className="mt-1">{dashboard.reports.length}</dd></div></dl>{dashboard.reports.length > 0 && <Button className="mt-6" variant="outline" onClick={() => void onOpenReport(dashboard.reports[0]!.id)}><FileText className="h-4 w-4" />Open latest report</Button>}<div className="mt-10 border-t border-rule pt-8"><h2 className="font-serif text-2xl">Email verification</h2><p className="mt-3 text-sm leading-relaxed text-muted-foreground">Verify this email address before relying on account-recovery messages.</p>{verificationSent ? <p className="mt-4 text-sm text-muted-foreground">If delivery is available for this pilot account, a verification link has been sent.</p> : <Button className="mt-5" variant="outline" disabled={busy} onClick={() => void requestVerification()}>Send verification email</Button>}<Button className="mt-10" variant="outline" disabled={busy} onClick={() => void signOut()}>Sign out</Button><h2 className="mt-10 font-serif text-2xl">Delete account</h2><p className="mt-3 text-sm leading-relaxed text-muted-foreground">Deleting your account removes your account, report uploads, analysis artifacts, exports, authorizations, sessions, and account-linked records. We retain only a non-identifying completion receipt for operational evidence.</p>{confirming ? <div className="mt-5 border border-negative p-5"><p className="font-medium">This cannot be undone.</p><p className="mt-2 text-sm text-muted-foreground">Your session will end immediately after deletion completes.</p>{error && <p className="mt-3 text-sm text-negative" role="alert">{error}</p>}<div className="mt-5 flex gap-3"><Button variant="outline" disabled={busy} onClick={() => void remove()}><Trash2 className="h-4 w-4" />Delete my account</Button><Button variant="outline" disabled={busy} onClick={() => setConfirming(false)}>Cancel</Button></div></div> : <Button className="mt-5" variant="outline" onClick={() => setConfirming(true)}><Trash2 className="h-4 w-4" />Delete account</Button>}</div></section>
 }
 
 function fileToBase64(file: File): Promise<string> { return new Promise((resolve, reject) => { const reader = new FileReader(); reader.onerror = () => reject(new Error('Unable to read this file')); reader.onload = () => { const result = reader.result; if (typeof result !== 'string') { reject(new Error('Unable to read this file')); return } resolve(result.split(',')[1] ?? '') }; reader.readAsDataURL(file) }) }

@@ -100,7 +100,7 @@ We may use service providers / processors that help us operate the pilot, such a
 - hosting / cloud infrastructure providers,
 - storage / backup providers,
 - monitoring / security vendors,
-- transactional communication providers,
+- Cloudflare Email Service, when enabled for account recovery and verification; it receives the consumer's email address and a one-hour, single-use link token solely to deliver the requested account message.
 - an optional narration/model provider if that feature is enabled.
 
 Any such processor should be bound by contractual duties covering confidentiality, security, deletion/return, incident notification, and approved subprocessors.
@@ -141,7 +141,7 @@ Privacy contact: `[EMAIL / ADDRESS / SUPPORT CHANNEL]`
 Before this notice can be finalized, confirm:
 - legal basis / state applicability language,
 - exact retention periods by category,
-- final processor categories and vendor names (if disclosed),
+- final Cloudflare Email Service sender-domain, contractual, subprocessors, deletion/return, and incident-contact details before it is enabled for real consumers,
 - rights request workflow and response times,
 - whether any sensitive personal information section or notice-at-collection format is required,
 - whether narration/model-provider disclosures are required for the free pilot even if the feature is optional.

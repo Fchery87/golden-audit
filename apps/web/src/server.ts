@@ -1,5 +1,5 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
-import { existsSync, readFileSync } from 'node:fs'
+import { appendFileSync, existsSync, readFileSync } from 'node:fs'
 import { extname, join, normalize } from 'node:path'
 import { createHealthStatus, createRuntimeEvent, type RuntimeEvent } from '../../../packages/domain/src/index.js'
 import {
@@ -10,6 +10,7 @@ import {
   type MatchGroup,
 } from '../../../packages/platform/src/index.js'
 import { buildPilotAvailabilityPayload, buildPilotOnboardingPayload } from './pilot-state.js'
+import { createConsumerEmailSender, type ConsumerEmailTransport } from './consumer-email.js'
 import { bootstrapGovernance } from './pilot-bootstrap.js'
 import { appendRuntimeEvent, resolveRuntimeDbPath, SqlitePlatformStore, FileBlobStore } from './runtime-store.js'
 
@@ -118,6 +119,17 @@ function recordRuntimeEvent(event: RuntimeEvent): void {
 }
 
 const SESSION_COOKIE = 'golden_audit_session'
+const localEmailOutboxPath = process.env.PILOT_EMAIL_OUTBOX_PATH
+if (localEmailOutboxPath && !localEmailOutboxPath.startsWith(`${runtimeDir}/`)) throw new Error('PILOT_EMAIL_OUTBOX_PATH must remain inside PILOT_PERSISTENCE_DIR')
+const localEmailSender = localEmailOutboxPath
+  ? createConsumerEmailSender({
+      appBaseUrl: process.env.CONSUMER_APP_URL ?? 'https://pilot.local.test/app',
+      from: process.env.CONSUMER_EMAIL_FROM ?? 'Golden Audit <no-reply@pilot.local.test>',
+      transport: {
+        send: async message => { appendFileSync(localEmailOutboxPath, `${JSON.stringify(message)}\n`, { encoding: 'utf8', mode: 0o600 }) },
+      } satisfies ConsumerEmailTransport,
+    })
+  : undefined
 const SESSION_COOKIE_MAX_AGE_SECONDS = 30 * 24 * 60 * 60
 
 /** D10: sessions travel as an httpOnly cookie, never a JS-readable header/localStorage bearer token. */
@@ -325,9 +337,9 @@ async function handleDeletion(request: IncomingMessage, response: ServerResponse
 async function handlePasswordResetRequest(request: IncomingMessage, response: ServerResponse): Promise<void> {
   const body = await readJsonBody(request) as PasswordResetRequestBody
   const result = await platform.requestPasswordReset(body.email)
-  // Deliberately identical response whether or not the email exists (no account-enumeration signal).
-  // No transactional email vendor is wired yet (D10 rationale) — logged only for pilot debugging.
-  if (result) console.log(`[password-reset] token issued for user ${result.userId} (no email vendor configured — token not delivered)`)
+  if (result && localEmailSender) {
+    try { await localEmailSender.sendPasswordReset(result) } catch { /* Preserve the enumeration-safe response; local operators inspect configured delivery separately. */ }
+  }
   respondJson(response, 200, { status: 'if-account-exists-reset-issued' })
 }
 async function handlePasswordResetConfirm(request: IncomingMessage, response: ServerResponse): Promise<void> {
@@ -338,7 +350,8 @@ async function handlePasswordResetConfirm(request: IncomingMessage, response: Se
 async function handleEmailVerificationRequest(request: IncomingMessage, response: ServerResponse): Promise<void> {
   const sessionId = getSessionId(request)
   const result = await platform.requestEmailVerification(sessionId)
-  console.log(`[email-verify] token issued (no email vendor configured — token not delivered): ${result.token}`)
+  if (!localEmailSender) throw new Error('Transactional email is not configured for this local server')
+  await localEmailSender.sendEmailVerification(result)
   respondJson(response, 200, { status: 'verification-issued' })
 }
 async function handleVerifyEmail(request: IncomingMessage, response: ServerResponse): Promise<void> {

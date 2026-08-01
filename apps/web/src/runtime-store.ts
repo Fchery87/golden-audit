@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync } from 'node:fs'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
@@ -7,6 +8,8 @@ import type {
   PlatformStore, BlobStore, Consent,
 } from '../../../packages/platform/src/index.js'
 import type { RuntimeEvent } from '../../../packages/domain/src/runtime-events.js'
+
+const authTokenHash = (token: string): string => createHash('sha256').update(token).digest('hex')
 
 export function resolveRuntimeDbPath(persistenceDir: string): string {
   if (!existsSync(persistenceDir)) mkdirSync(persistenceDir, { recursive: true })
@@ -166,13 +169,13 @@ export class SqlitePlatformStore implements PlatformStore {
     return Number(result.changes) > 0
   }
 
-  async createToken(kind: 'password-reset' | 'email-verify', token: string, userId: Id, expiresAt: string) { this.db.prepare('INSERT INTO auth_tokens (token, kind, user_id, expires_at) VALUES (?, ?, ?, ?)').run(token, kind, userId, expiresAt) }
+  async createToken(kind: 'password-reset' | 'email-verify', token: string, userId: Id, expiresAt: string) { this.db.prepare('INSERT INTO auth_tokens (token, kind, user_id, expires_at) VALUES (?, ?, ?, ?)').run(authTokenHash(token), kind, userId, expiresAt) }
   async consumeToken(kind: 'password-reset' | 'email-verify', token: string) {
-    const result = this.db.prepare('UPDATE auth_tokens SET consumed_at = ? WHERE token = ? AND kind = ? AND consumed_at IS NULL').run(new Date().toISOString(), token, kind)
-    if (Number(result.changes) === 0) return undefined
-    const row = this.db.prepare('SELECT user_id, expires_at FROM auth_tokens WHERE token = ?').get(token) as { user_id: string; expires_at: string } | undefined
+    const tokenHash = authTokenHash(token)
+    const row = this.db.prepare('SELECT user_id, expires_at FROM auth_tokens WHERE token = ? AND kind = ? AND consumed_at IS NULL').get(tokenHash, kind) as { user_id: string; expires_at: string } | undefined
     if (!row || Date.parse(row.expires_at) <= Date.now()) return undefined
-    return { userId: row.user_id }
+    const result = this.db.prepare('UPDATE auth_tokens SET consumed_at = ? WHERE token = ? AND kind = ? AND consumed_at IS NULL').run(new Date().toISOString(), tokenHash, kind)
+    return Number(result.changes) === 1 ? { userId: row.user_id } : undefined
   }
 }
 

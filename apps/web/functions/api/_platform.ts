@@ -1,5 +1,6 @@
 import type { D1Database, R2Bucket, RateLimit } from '@cloudflare/workers-types'
 import { CreditAnalysisPlatform, type LaunchScope, type PilotApprovalRecordFile, type BlobStore, type Id } from '../../../../packages/platform/src/index.js'
+import { createConsumerEmailSender, type ConsumerEmailTransport } from '../../src/consumer-email.js'
 import { buildPilotAvailabilityPayload, buildPilotOnboardingPayload } from '../../src/pilot-state.js'
 import { bootstrapGovernance } from '../../src/pilot-bootstrap.js'
 import { D1PlatformStore } from './store-d1.js'
@@ -9,6 +10,20 @@ export interface PilotPagesEnv {
   PILOT_UPLOADS: R2Bucket
   /** D10: register/sign-in/password-reset rate limiting, keyed by client IP. */
   AUTH_RATE_LIMITER: RateLimit
+  /** Cloudflare Email Sending binding; configured in wrangler.jsonc. */
+  EMAIL: { send(message: { to: string; from: string; subject: string; text: string; html: string }): Promise<void> }
+  /** HTTPS origin of the consumer app, e.g. https://pilot.example.com/app. */
+  CONSUMER_APP_URL: string
+  /** Verified Cloudflare Email Sending sender address. */
+  CONSUMER_EMAIL_FROM: string
+}
+
+export function loadConsumerEmailSender(env: PilotPagesEnv) {
+  return createConsumerEmailSender({
+    appBaseUrl: env.CONSUMER_APP_URL,
+    from: env.CONSUMER_EMAIL_FROM,
+    transport: env.EMAIL as ConsumerEmailTransport,
+  })
 }
 
 const UPLOAD_PREFIX = 'uploads/'

@@ -1,6 +1,6 @@
 import type { PagesFunction } from '@cloudflare/workers-types'
 import { type Jurisdiction, type MatchGroup } from '../../../../../packages/platform/src/index.js'
-import { loadPilotPlatform, type PilotPagesEnv } from '../_platform.js'
+import { loadPilotPlatform, loadConsumerEmailSender, type PilotPagesEnv } from '../_platform.js'
 import { buildPilotAvailabilityPayload, buildPilotOnboardingPayload } from '../../../src/pilot-state.js'
 
 type JsonRecord = Record<string, unknown>
@@ -248,10 +248,9 @@ async function handlePasswordResetRequest(env: PilotPagesEnv, request: any): Pro
   const body = await readJsonBody(request) as PasswordResetRequestBody
   const platform = loadPilotPlatform(env)
   const result = await platform.requestPasswordReset(body.email)
-  // Deliberately identical response whether or not the email exists (no account-enumeration signal).
-  // result.token would be handed to an EmailSender here; no vendor is wired yet (D10 — see
-  // docs/consumer-workflow-implementation-plan.md D10 rationale). Logged only for pilot debugging.
-  if (result) console.log(`[password-reset] token issued for user ${result.userId} (no email vendor configured — token not delivered)`)
+  if (result) {
+    try { await loadConsumerEmailSender(env).sendPasswordReset(result) } catch { /* Preserve the enumeration-safe response; operators monitor provider delivery failures. */ }
+  }
   return respondJson({ status: 'if-account-exists-reset-issued' }, 200)
 }
 async function handlePasswordResetConfirm(env: PilotPagesEnv, request: any): Promise<Response> {
@@ -264,7 +263,7 @@ async function handleEmailVerificationRequest(env: PilotPagesEnv, request: any):
   const sessionId = getSessionId(request)
   const platform = loadPilotPlatform(env)
   const result = await platform.requestEmailVerification(sessionId)
-  console.log(`[email-verify] token issued (no email vendor configured — token not delivered): ${result.token}`)
+  await loadConsumerEmailSender(env).sendEmailVerification(result)
   return respondJson({ status: 'verification-issued' }, 200)
 }
 async function handleVerifyEmail(env: PilotPagesEnv, request: any): Promise<Response> {

@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { once } from 'node:events'
@@ -202,6 +202,52 @@ test('web boundary publishes approved-state onboarding and pilot availability fr
     assert.equal(newYork.eligible, false)
     assert.equal(newYork.stateChecked, 'US-NY')
     assert.match(newYork.blockedStateMessage, /not currently available/i)
+  } finally {
+    child.kill()
+    await once(child, 'exit').catch(() => undefined)
+    rmSync(persistenceDir, { recursive: true, force: true })
+  }
+})
+
+test('web boundary delivers account recovery through the configured local sender without account enumeration', async () => {
+  const port = 3206
+  const persistenceDir = mkdtempSync(join(tmpdir(), 'golden-audit-web-'))
+  const outboxPath = join(persistenceDir, 'email-outbox.jsonl')
+  const child = spawn(process.execPath, ['--import', 'tsx', 'apps/web/src/server.ts'], {
+    env: {
+      ...process.env,
+      WEB_PORT: String(port),
+      PILOT_PERSISTENCE_DIR: persistenceDir,
+      PILOT_EMAIL_OUTBOX_PATH: join(persistenceDir, 'email-outbox.jsonl'),
+      CONSUMER_APP_URL: 'https://pilot.example.test/app',
+      CONSUMER_EMAIL_FROM: 'Golden Audit <no-reply@pilot.example.test>',
+    },
+    stdio: 'ignore',
+  })
+
+  try {
+    await waitForServer(port)
+    const inviteCode = await issueInviteFor(persistenceDir)
+    const registration = await postJson<RegisterResponse>(port, '/consumer/register', {
+      email: 'recovery@example.com', password: 'correct horse battery staple', inviteCode,
+    })
+    assert.equal(registration.statusCode, 201)
+
+    const known = await postJson<{ status: string }>(port, '/consumer/password-reset/request', { email: 'recovery@example.com' })
+    const unknown = await postJson<{ status: string }>(port, '/consumer/password-reset/request', { email: 'missing@example.com' })
+    assert.equal(known.statusCode, 200)
+    assert.deepEqual(known.body, unknown.body)
+
+    const outbox = readFileSync(outboxPath, 'utf8').trim().split('\n').map(line => JSON.parse(line) as { to: string; text: string })
+    assert.equal(outbox.length, 1)
+    assert.equal(outbox[0]?.to, 'recovery@example.com')
+    const token = new URL(outbox[0]?.text.match(/https:\/\/[^\s]+/)?.[0] ?? '').searchParams.get('resetToken')
+    assert.ok(token)
+
+    const confirmation = await postJson<{ status: string }>(port, '/consumer/password-reset/confirm', { token, newPassword: 'new correct horse battery staple' })
+    assert.equal(confirmation.statusCode, 200)
+    const signIn = await postJson<{ status: string }>(port, '/consumer/sign-in', { email: 'recovery@example.com', password: 'new correct horse battery staple' })
+    assert.equal(signIn.statusCode, 200)
   } finally {
     child.kill()
     await once(child, 'exit').catch(() => undefined)

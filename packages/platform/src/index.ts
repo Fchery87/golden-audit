@@ -161,12 +161,12 @@ export class CreditAnalysisPlatform {
     return code
   }
 
-  async requestPasswordReset(email: string): Promise<{ userId: Id; token: string } | undefined> {
+  async requestPasswordReset(email: string): Promise<{ email: string; token: string } | undefined> {
     const user = await this.store.getUserByEmail(email.toLowerCase())
     if (!user) return undefined
     const token = randomBytes(24).toString('base64url')
     await this.store.createToken('password-reset', token, user.id, new Date(Date.now() + TOKEN_TTL_MS).toISOString())
-    return { userId: user.id, token }
+    return { email: user.email, token }
   }
   async resetPassword(token: string, newPassword: string): Promise<void> {
     if (newPassword.length < 12) throw new Error('Password must be at least 12 characters')
@@ -179,11 +179,13 @@ export class CreditAnalysisPlatform {
     await this.audit('password-reset', consumed.userId, consumed.userId, {})
   }
 
-  async requestEmailVerification(sessionId: Id): Promise<{ token: string }> {
+  async requestEmailVerification(sessionId: Id): Promise<{ email: string; token: string }> {
     const userId = await this.requireSession(sessionId)
+    const user = await this.store.getUserById(userId)
+    if (!user) throw new Error('Account not found')
     const token = randomBytes(24).toString('base64url')
     await this.store.createToken('email-verify', token, userId, new Date(Date.now() + TOKEN_TTL_MS).toISOString())
-    return { token }
+    return { email: user.email, token }
   }
   async verifyEmail(token: string): Promise<void> {
     const consumed = await this.store.consumeToken('email-verify', token)

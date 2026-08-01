@@ -28,8 +28,17 @@
          "simple": { "limit": 5, "period": 60 }
        }
      ],
+     "send_email": [
+       {
+         "name": "EMAIL"
+       }
+     ],
      "vars": {
        "PILOT_APPROVAL_RECORD_PATH": "docs/pilot-approval-records.json",
-       "PILOT_SCOPE": "california-one-state-pilot"
+       "PILOT_SCOPE": "california-one-state-pilot",
+       // D10: replace before enabling delivery. The domain must be an HTTPS app origin you control,
+       // and the sender must be verified in Cloudflare Email Service.
+       "CONSUMER_APP_URL": "https://REPLACE-BEFORE-DEPLOYMENT.example/app",
+       "CONSUMER_EMAIL_FROM": "Golden Audit <no-reply@REPLACE-BEFORE-DEPLOYMENT.example>"
      }
    }
