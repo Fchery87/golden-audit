@@ -364,7 +364,11 @@ export class CreditAnalysisPlatform {
     if (!isParserInput(input)) throw new Error('Report schema validation failed')
     const parserVersion = 'fixture-adapter@1'; const extractionMethod = 'html-selector' // synthetic-fixture path is HTML-only (PDFs route to the real adapter)
     const makeValue = <T>(bureau: Bureau, field: string, normalized: T | null, originalDisplay: string, locator: string, confidence = 1): CanonicalValue<T> => ({ id: randomUUID(), bureau, field, normalized, originalDisplay, state: normalized === null ? 'unknown' : 'known', source: { kind: 'element', locator, snippet: originalDisplay.slice(0, 80) }, extractionMethod, parserVersion, confidence })
-    const tradelines = input.tradelines.map((line, index): Tradeline => ({ id: randomUUID(), creditor: makeValue(line.bureau, 'creditor', line.creditor, line.creditor, `${index}:creditor`), maskedAccount: makeValue(line.bureau, 'account', maskAccount(line.account), maskAccount(line.account), `${index}:account`), accountType: makeValue(line.bureau, 'accountType', line.accountType, line.accountType, `${index}:type`), balance: { ...makeValue(line.bureau, 'balance', line.balance, `$${(line.balance / 100).toFixed(2)}`, `${index}:balance`, line.confidence ?? 1), currency: 'USD' }, creditLimit: { ...makeValue(line.bureau, 'creditLimit', line.creditLimit ?? null, line.creditLimit === undefined ? '' : `$${(line.creditLimit / 100).toFixed(2)}`, `${index}:credit-limit`, line.confidence ?? 1), currency: 'USD' }, pastDue: { ...makeValue(line.bureau, 'pastDue', line.pastDue ?? null, line.pastDue === undefined ? '' : `$${(line.pastDue / 100).toFixed(2)}`, `${index}:past-due`, line.confidence ?? 1), currency: 'USD' }, status: makeValue(line.bureau, 'status', line.status, line.status, `${index}:status`), opened: { ...makeValue(line.bureau, 'opened', line.opened, line.opened, `${index}:opened`), datePrecision: line.opened.length === 7 ? 'month' : 'day' }, updated: { ...makeValue(line.bureau, 'updated', line.updated, line.updated, `${index}:updated`), datePrecision: line.updated.length === 7 ? 'month' : 'day' } }))
+    const tradelines = input.tradelines.map((line, index): Tradeline => {
+      const confidence = line.confidence ?? 1
+      const sliceValues = (field: string, values: string[]) => values.map((value, valueIndex) => makeValue(line.bureau, field, value, value, `${index}:${field}:${valueIndex}`, confidence))
+      return { id: randomUUID(), creditor: makeValue(line.bureau, 'creditor', line.creditor, line.creditor, `${index}:creditor`), maskedAccount: makeValue(line.bureau, 'account', maskAccount(line.account), maskAccount(line.account), `${index}:account`), accountType: makeValue(line.bureau, 'accountType', line.accountType, line.accountType, `${index}:type`), balance: { ...makeValue(line.bureau, 'balance', line.balance, `$${(line.balance / 100).toFixed(2)}`, `${index}:balance`, confidence), currency: 'USD' }, creditLimit: { ...makeValue(line.bureau, 'creditLimit', line.creditLimit ?? null, line.creditLimit === undefined ? '' : `$${(line.creditLimit / 100).toFixed(2)}`, `${index}:credit-limit`, confidence), currency: 'USD' }, pastDue: { ...makeValue(line.bureau, 'pastDue', line.pastDue ?? null, line.pastDue === undefined ? '' : `$${(line.pastDue / 100).toFixed(2)}`, `${index}:past-due`, confidence), currency: 'USD' }, status: makeValue(line.bureau, 'status', line.status, line.status, `${index}:status`), opened: { ...makeValue(line.bureau, 'opened', line.opened, line.opened, `${index}:opened`), datePrecision: line.opened.length === 7 ? 'month' : 'day' }, updated: { ...makeValue(line.bureau, 'updated', line.updated, line.updated, `${index}:updated`), datePrecision: line.updated.length === 7 ? 'month' : 'day' }, dateOfFirstDelinquency: { ...makeValue(line.bureau, 'dateOfFirstDelinquency', line.dateOfFirstDelinquency ?? null, line.dateOfFirstDelinquency ?? '', `${index}:date-of-first-delinquency`, confidence), datePrecision: line.dateOfFirstDelinquency?.length === 7 ? 'month' : 'day' }, paymentHistory: (line.paymentHistory ?? []).map((cell, cellIndex) => ({ ...makeValue(line.bureau, 'paymentHistory', cell.status, cell.status, `${index}:payment-history:${cellIndex}`, confidence), yearMonth: cell.yearMonth })), remarks: sliceValues('remark', line.remarks ?? []), specialCommentCodes: sliceValues('specialCommentCode', line.specialCommentCodes ?? []) }
+    })
     const firstBureau = input.tradelines[0]?.bureau ?? 'equifax'; const mapText = (items: string[], field: string) => items.map((value, i) => makeValue(firstBureau, field, value, value, `${field}:${i}`))
     const report: CanonicalReport = { id: randomUUID(), userId, uploadId, provider: input.provider, template: input.template, parserVersion, normalizedVersion: 1, reportDate: input.reportDate, identity: mapText(input.identity, 'identity'), addresses: mapText(input.addresses, 'address'), employers: mapText(input.employers, 'employer'), tradelines, collections: [], inquiries: mapText(input.inquiries, 'inquiry'), publicRecords: mapText(input.publicRecords, 'publicRecord'), scores: input.scores.map((score, i) => makeValue(firstBureau, 'score', score, String(score), `score:${i}`)), remarks: mapText(input.remarks, 'remark'), reviewComplete: false }
     const parsedAt = now()
@@ -589,7 +593,7 @@ export class CreditAnalysisPlatform {
         return { ...module, authorities }
       }) : []
     const coverage: CoverageRow[] = ruleset.map(rule => ({ ruleId: rule.id, name: rule.name, requiredInputs: [...rule.requiredInputs], outcomes: analysis.audit.filter(audit => audit.ruleId === rule.id) }))
-    const fieldNames = ['accountType', 'balance', 'creditLimit', 'pastDue', 'status', 'opened', 'updated'] as const
+    const fieldNames = ['accountType', 'balance', 'creditLimit', 'pastDue', 'status', 'opened', 'updated', 'dateOfFirstDelinquency'] as const
     const parserFields: ParserFieldAvailability[] = fieldNames.map(field => ({
       field,
       capability: 'supported',
@@ -599,7 +603,16 @@ export class CreditAnalysisPlatform {
         return states
       }, { known: 0, unknown: 0, blank: 0, 'not-applicable': 0, 'parser-failed': 0 }),
     }))
-    for (const field of ['date of first delinquency', 'payment history', 'remarks', 'special comment codes']) parserFields.push({ field, capability: 'planned', states: { known: 0, unknown: 0, blank: 0, 'not-applicable': 0, 'parser-failed': 0 } })
+    for (const field of ['paymentHistory', 'remarks', 'specialCommentCodes'] as const) parserFields.push({
+      field,
+      capability: 'supported',
+      states: report.tradelines.reduce<ParserFieldAvailability['states']>((states, line) => {
+        const values = line[field]
+        if (values.length === 0) states.unknown += 1
+        else for (const value of values) states[value.state] += 1
+        return states
+      }, { known: 0, unknown: 0, blank: 0, 'not-applicable': 0, 'parser-failed': 0 }),
+    })
     const consumerReport: ConsumerReport = {
       id: randomUUID(), userId, analysisId,
       limitations: ['Educational information only', 'No legal verdict; no deletion promise or score prediction'],
@@ -918,7 +931,7 @@ export class CreditAnalysisPlatform {
   }
 }
 
-type ParserInput = { provider: string; template: string; reportDate: string; identity: string[]; addresses: string[]; employers: string[]; inquiries: string[]; publicRecords: string[]; scores: number[]; remarks: string[]; tradelines: Array<{ bureau: Bureau; creditor: string; account: string; accountType: string; balance: number; creditLimit?: number; pastDue?: number; status: string; opened: string; updated: string; confidence?: number }> }
+type ParserInput = { provider: string; template: string; reportDate: string; identity: string[]; addresses: string[]; employers: string[]; inquiries: string[]; publicRecords: string[]; scores: number[]; remarks: string[]; tradelines: Array<{ bureau: Bureau; creditor: string; account: string; accountType: string; balance: number; creditLimit?: number; pastDue?: number; status: string; opened: string; updated: string; dateOfFirstDelinquency?: string; paymentHistory?: Array<{ yearMonth: string; status: string }>; remarks?: string[]; specialCommentCodes?: string[]; confidence?: number }> }
 function isParserInput(value: unknown): value is ParserInput { if (!value || typeof value !== 'object') return false; const item = value as Record<string, unknown>; return typeof item.provider === 'string' && typeof item.template === 'string' && typeof item.reportDate === 'string' && ['identity', 'addresses', 'employers', 'inquiries', 'publicRecords', 'scores', 'remarks', 'tradelines'].every(key => Array.isArray(item[key])) }
 
 /** Map the parser's ProviderReport → the platform's CanonicalReport (bureaus kept separate; unknowns marked). */
@@ -952,9 +965,13 @@ function mapParserReportToCanonical(pr: ParserReport, userId: Id, uploadId: Id):
         status: toCanonical(t.status),
         opened: toCanonical(t.opened),
         updated: toCanonical(t.updated),
+        dateOfFirstDelinquency: toCanonical(t.dateOfFirstDelinquency),
+        paymentHistory: t.paymentHistory.map(cell => ({ ...toCanonical(cell), yearMonth: cell.yearMonth })),
+        remarks: t.remarks.map(value => toCanonical(value)),
+        specialCommentCodes: t.specialCommentCodes.map(value => toCanonical(value)),
       })
     })
   return { id: randomUUID(), userId, uploadId, provider: pr.provider, template: pr.template, parserVersion, normalizedVersion: 1, reportDate: pr.reportDate ?? '', identity: [], addresses: [], employers: [], tradelines, collections: [], inquiries: [], publicRecords: [], scores: [], remarks: [], reviewComplete: false }
 }
-function allValues(report: CanonicalReport): CanonicalValue<unknown>[] { const direct: CanonicalValue<unknown>[] = [...report.identity, ...report.addresses, ...report.employers, ...report.inquiries, ...report.publicRecords, ...report.scores, ...report.remarks]; for (const line of [...report.tradelines, ...report.collections]) direct.push(line.creditor, line.maskedAccount, line.accountType, line.balance, line.creditLimit, line.pastDue, line.status, line.opened, line.updated); return direct }
+function allValues(report: CanonicalReport): CanonicalValue<unknown>[] { const direct: CanonicalValue<unknown>[] = [...report.identity, ...report.addresses, ...report.employers, ...report.inquiries, ...report.publicRecords, ...report.scores, ...report.remarks]; for (const line of [...report.tradelines, ...report.collections]) direct.push(line.creditor, line.maskedAccount, line.accountType, line.balance, line.creditLimit, line.pastDue, line.status, line.opened, line.updated, line.dateOfFirstDelinquency, ...line.paymentHistory, ...line.remarks, ...line.specialCommentCodes); return direct }
 function validateNarration(text: string, analysis: Analysis): boolean { if (!text.trim() || /guarantee|will be deleted|illegal|violation|\b\d{9}\b|ignore previous|system prompt/i.test(text)) return false; return analysis.findings.every(finding => text.includes(finding.title) && finding.limitations.every(limitation => text.includes(limitation))) }

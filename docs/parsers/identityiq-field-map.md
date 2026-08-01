@@ -38,7 +38,14 @@
 | Responsibility | individual/joint/authorized-user |
 
 ## Canonical mapping (to `packages/parser` types)
-Each parsed tradeline maps to `ParserTradeline` (creditor, maskedAccount, balance/status/opened/updated as `ParserValue<T>` with **element/page-level provenance**, original display text, calibrated confidence, missing-value state). Bureaus stay separate (`bureau: 'transunion'|'experian'|'equifax'`) — never destructively merged (CONTEXT.md / spec). Unparseable or absent values → `normalized: null`, `state: 'unknown'` (never invented).
+Each parsed tradeline maps to `ParserTradeline` (creditor, maskedAccount, balance/status/opened/updated, date of first delinquency, payment-history cells, remarks, and special comment codes as provenance-bearing `ParserValue<T>` values). Payment cells are admitted only when the PDF display carries an explicit `YYYY-MM:<status>` month key; text without an explicit key is unavailable rather than positioned or inferred. Bureaus stay separate (`bureau: 'transunion'|'experian'|'equifax'`) — never destructively merged (CONTEXT.md / spec). Unparseable or absent scalar values → `normalized: null`, `state: 'unknown'`; absent repeated values → an empty list and unavailable coverage (never invented).
+
+## Slice 2 interpretation and boundary
+- **DOFD:** the adapter recognizes only the explicit `Date of First Delinquency` label and preserves the displayed value plus source location. It does not emit a Finding from the value.
+- **Payment history:** the adapter accepts an explicitly date-keyed status sequence, retaining each month/status cell independently. It does not infer a header, month order, missing cells, or a 24-month grid from unkeyed positional text.
+- **Remarks and special comment codes:** the adapter recognizes the separate `Remarks` and `Special Comment Code(s)` labels and records their displayed text/code separately for each bureau. It never derives a special code from free-text remarks.
+- **No re-aging conclusion:** movement requires reliably matched account identity across separately dated reports. This one-report parser and analysis model do not make that comparison, so no re-aging or DOFD Finding is published in this slice.
+
 
 ## DECISIVE FINDING — IdentityIQ saved HTML is a template shell (no per-account data)
 

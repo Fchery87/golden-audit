@@ -78,6 +78,10 @@ export function parseStructuredHtml(content: string, provider = 'sample-educatio
       status: value(bureau, 'status', status, status, `tradelines/tr[${rowIndex}]/td[4]`, 1, 'known'),
       opened: value(bureau, 'opened', opened, opened, `tradelines/tr[${rowIndex}]/td[5]`, 1, 'known'),
       updated: value(bureau, 'updated', updated, updated, `tradelines/tr[${rowIndex}]/td[6]`, 1, 'known'),
+      dateOfFirstDelinquency: value<string>(bureau, 'dateOfFirstDelinquency', null, '', `tradelines/tr[${rowIndex}]/dateOfFirstDelinquency`, 0, 'unknown'),
+      paymentHistory: [],
+      remarks: [],
+      specialCommentCodes: [],
     })
     rowIndex += 1
   }

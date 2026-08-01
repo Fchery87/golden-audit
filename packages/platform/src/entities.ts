@@ -84,6 +84,10 @@ export type Tradeline = {
   status: CanonicalValue<string>
   opened: CanonicalValue<string>
   updated: CanonicalValue<string>
+  dateOfFirstDelinquency: CanonicalValue<string>
+  paymentHistory: Array<CanonicalValue<string> & { yearMonth: string }>
+  remarks: CanonicalValue<string>[]
+  specialCommentCodes: CanonicalValue<string>[]
 }
 
 export type CanonicalReport = {

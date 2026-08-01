@@ -108,6 +108,31 @@ test('identityiq-pdf: reconstructs account blocks with masked account, status, o
   assert.match(byBureau.get('transunion')?.balance.source.locator ?? '', /pdf:p1:y360:transunion:balance/)
 })
 
+test('identityiq-pdf: preserves explicitly dated payment cells and account-level Slice 2 values with provenance', () => {
+  const report = parseIdentityIqPdf([
+    word(1, 130, 100, 210, 112, 'Slice Two Bank'),
+    word(1, 150, 120, 190, 132, 'Account'), word(1, 195, 120, 215, 132, '#:'),
+    word(1, 225, 120, 270, 132, '44445555****'), word(1, 356, 120, 401, 132, '44445555****'), word(1, 488, 120, 533, 132, '44445555****'),
+    word(1, 160, 134, 210, 146, 'Balance:'),
+    word(1, 225, 134, 260, 146, '$100.00'), word(1, 356, 134, 391, 146, '$100.00'), word(1, 488, 134, 523, 146, '$100.00'),
+    word(1, 130, 148, 220, 160, 'Date of First Delinquency:'),
+    word(1, 225, 148, 280, 160, '2021-02'), word(1, 356, 148, 411, 160, '2021-03'), word(1, 488, 148, 543, 160, '2021-02'),
+    word(1, 160, 162, 220, 174, 'Payment History:'),
+    word(1, 225, 162, 310, 174, '2026-01:C 2025-12:30'), word(1, 356, 162, 441, 174, '2026-01:C 2025-12:C'), word(1, 488, 162, 573, 174, '2026-01:C 2025-12:C'),
+    word(1, 160, 175, 220, 187, 'Payment History:'),
+    word(1, 225, 175, 310, 187, '2025-11:60'), word(1, 356, 175, 441, 187, '2025-11:C'), word(1, 488, 175, 573, 187, '2025-11:C'),
+    word(1, 160, 188, 220, 200, 'Remarks:'),
+    word(1, 225, 188, 330, 200, 'Consumer disputes this account'), word(1, 356, 188, 461, 200, 'Consumer disputes this account'), word(1, 488, 188, 593, 200, 'Consumer disputes this account'),
+    word(1, 160, 202, 270, 214, 'Special Comment Code:'),
+    word(1, 225, 202, 280, 214, 'AW'), word(1, 356, 202, 411, 214, 'AW'), word(1, 488, 202, 543, 214, 'AW'),
+  ])
+  const transunion = report.tradelines.find(line => line.bureau === 'transunion')
+  assert.equal(transunion?.dateOfFirstDelinquency.normalized, '2021-02')
+  assert.deepEqual(transunion?.paymentHistory.map(cell => [cell.yearMonth, cell.normalized]), [['2026-01', 'C'], ['2025-12', '30'], ['2025-11', '60']])
+  assert.equal(transunion?.remarks[0]?.normalized, 'Consumer disputes this account')
+  assert.equal(transunion?.specialCommentCodes[0]?.normalized, 'AW')
+  assert.match(transunion?.paymentHistory[0]?.source.locator ?? '', /paymentHistory:2026-01/)
+})
 test('identityiq-pdf: end-to-end → deterministic core flags the differing bureau, not the agreeing one', () => {
   const report = parseIdentityIqPdf(fixture())
   const run = (creditor: string) => {

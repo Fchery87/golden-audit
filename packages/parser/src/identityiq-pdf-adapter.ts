@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import type { Bureau, ParserReport, ParserTradeline, ParserValue } from './types.js'
+import type { Bureau, ParserPaymentHistoryCell, ParserReport, ParserTradeline, ParserValue } from './types.js'
 import { bureauForX, detectBureauColumns, nearestBureau, CREDITOR_X_MAX, xCenter, type Word } from './positional-types.js'
 
 /**
@@ -24,7 +24,8 @@ const FIELD_CONFIDENCE = 1
 
 type BureauValueMap = Partial<Record<Bureau, Word[]>>
 type Row = { page: number; yMin: number; words: Word[] }
-type FieldName = 'maskedAccount' | 'accountType' | 'status' | 'opened' | 'updated' | 'balance' | 'creditLimit' | 'pastDue'
+type FieldName = 'maskedAccount' | 'accountType' | 'status' | 'opened' | 'updated' | 'balance' | 'creditLimit' | 'pastDue' | 'dateOfFirstDelinquency'
+type RepeatedFieldName = 'paymentHistory' | 'remarks' | 'specialCommentCodes'
 
 function parseMoney(cell: string): { minor: number | null } {
   const trimmed = cell.trim()
@@ -124,6 +125,7 @@ function normalizeFieldText(field: FieldName, text: string): string {
   if (field === 'balance') return compact.replace(/^balance:\s*/i, '').trim()
   if (field === 'creditLimit') return compact.replace(/^(credit\s+limit|high\s+credit):\s*/i, '').trim()
   if (field === 'pastDue') return compact.replace(/^past\s+due:\s*/i, '').trim()
+  if (field === 'dateOfFirstDelinquency') return compact.replace(/^date\s+of\s+first\s+delinquency:\s*/i, '').trim()
   return compact
 }
 
@@ -149,6 +151,34 @@ function parseField(field: FieldName, bureau: Bureau, text: string, page: number
     : rowValue<string>(bureau, field, null, normalizedText, page, yMin, 0, 'unknown')
 }
 
+type RepeatedValue = { value: string; yearMonth?: string }
+
+function parseRepeatedValues(field: RepeatedFieldName, bureau: Bureau, text: string, page: number, yMin: number): ParserValue<string>[] {
+  const normalized = text.replace(/\s+/g, ' ').trim()
+  const content = field === 'remarks' ? normalized.replace(/^remarks?:\s*/i, '') : field === 'specialCommentCodes' ? normalized.replace(/^special\s+comment\s+codes?:\s*/i, '') : normalized
+  if (!content) return []
+  const values: RepeatedValue[] = field === 'paymentHistory' ? content.split(/\s+/).flatMap(token => {
+    const match = /^(\d{4}-\d{2}):(.+)$/.exec(token)
+    return match?.[1] && match[2] ? [{ yearMonth: match[1], value: match[2] }] : []
+  }) : [{ value: content }]
+  return values.map((item, index) => ({
+    ...rowValue<string>(bureau, field, item.value, item.value, page, yMin, FIELD_CONFIDENCE, 'known'),
+    ...(field === 'paymentHistory' && item.yearMonth ? { yearMonth: item.yearMonth, source: { kind: 'element' as const, locator: `pdf:p${page}:y${Math.round(yMin)}:${bureau}:${field}:${item.yearMonth}`, snippet: item.value.slice(0, 80) } } : {}),
+    ...(field !== 'paymentHistory' ? { source: { kind: 'element' as const, locator: `pdf:p${page}:y${Math.round(yMin)}:${bureau}:${field}:${index}`, snippet: item.value.slice(0, 80) } } : {}),
+  }))
+}
+
+function unknownDateOfFirstDelinquency(bureau: Bureau, page: number, yMin: number): ParserValue<string> {
+  return rowValue<string>(bureau, 'dateOfFirstDelinquency', null, '', page, yMin, 0, 'unknown')
+}
+
+function parsePaymentHistoryRows(bureau: Bureau, rows: Row[], bureauOf: (x: number) => Bureau | null): ParserPaymentHistoryCell[] {
+  const cells = rows.flatMap(row => parseRepeatedValues('paymentHistory', bureau, joined(bureauWordBuckets(row, bureauOf)[bureau]), row.page, row.yMin) as ParserPaymentHistoryCell[])
+  const counts = new Map<string, number>()
+  for (const cell of cells) counts.set(cell.yearMonth, (counts.get(cell.yearMonth) ?? 0) + 1)
+  return cells.filter(cell => counts.get(cell.yearMonth) === 1)
+}
+
 function buildTradelinesFromAccountBlocks(words: Word[]): ParserTradeline[] {
   const tradelines: ParserTradeline[] = []
   const detected = detectBureauColumns(words)
@@ -163,6 +193,7 @@ function buildTradelinesFromAccountBlocks(words: Word[]): ParserTradeline[] {
     if (!creditor) continue
 
     const fieldRows = new Map<FieldName, Row>()
+    const repeatedRows = new Map<RepeatedFieldName, Row[]>()
     fieldRows.set('maskedAccount', row)
     for (let cursor = index + 1; cursor < rows.length; cursor += 1) {
       const candidate = rows[cursor]
@@ -177,6 +208,10 @@ function buildTradelinesFromAccountBlocks(words: Word[]): ParserTradeline[] {
       else if (/^high\s+credit:?$/i.test(label)) fieldRows.set('creditLimit', candidate)
       else if (/^credit\s+limit:?$/i.test(label)) fieldRows.set('creditLimit', candidate)
       else if (/^past\s+due:?$/i.test(label)) fieldRows.set('pastDue', candidate)
+      else if (/^date\s+of\s+first\s+delinquency:?$/i.test(label)) fieldRows.set('dateOfFirstDelinquency', candidate)
+      else if (/^payment\s+history:?$/i.test(label)) repeatedRows.set('paymentHistory', [...(repeatedRows.get('paymentHistory') ?? []), candidate])
+      else if (/^remarks?:?$/i.test(label)) repeatedRows.set('remarks', [...(repeatedRows.get('remarks') ?? []), candidate])
+      else if (/^special\s+comment\s+codes?:?$/i.test(label)) repeatedRows.set('specialCommentCodes', [...(repeatedRows.get('specialCommentCodes') ?? []), candidate])
     }
 
     const fieldMaps = new Map<FieldName, BureauValueMap>()
@@ -198,6 +233,13 @@ function buildTradelinesFromAccountBlocks(words: Word[]): ParserTradeline[] {
       const balanceText = joined(fieldMaps.get('balance')?.[bureau])
       const creditLimitText = joined(fieldMaps.get('creditLimit')?.[bureau])
       const pastDueText = joined(fieldMaps.get('pastDue')?.[bureau])
+      const dofdRow = fieldRows.get('dateOfFirstDelinquency')
+      const dofdText = joined(fieldMaps.get('dateOfFirstDelinquency')?.[bureau])
+      const paymentHistoryRows = repeatedRows.get('paymentHistory') ?? []
+      const remarksRows = repeatedRows.get('remarks') ?? []
+      const specialCommentCodesRows = repeatedRows.get('specialCommentCodes') ?? []
+      const remarks = remarksRows.flatMap(sourceRow => parseRepeatedValues('remarks', bureau, joined(bureauWordBuckets(sourceRow, bureauOf)[bureau]), sourceRow.page, sourceRow.yMin))
+      const specialCommentCodes = specialCommentCodesRows.flatMap(sourceRow => parseRepeatedValues('specialCommentCodes', bureau, joined(bureauWordBuckets(sourceRow, bureauOf)[bureau]), sourceRow.page, sourceRow.yMin))
       const balance = parseField('balance', bureau, balanceText, row.page, row.yMin) as ParserValue<number>
       // The adapter only emits a tradeline when the account block contains a usable balance.
       // This preserves the original parser's strict, money-row-backed account boundary and
@@ -215,6 +257,10 @@ function buildTradelinesFromAccountBlocks(words: Word[]): ParserTradeline[] {
         status: parseField('status', bureau, statusText, row.page, row.yMin) as ParserValue<string>,
         opened: parseField('opened', bureau, openedText, row.page, row.yMin) as ParserValue<string>,
         updated: parseField('updated', bureau, updatedText, row.page, row.yMin) as ParserValue<string>,
+        dateOfFirstDelinquency: dofdText ? parseField('dateOfFirstDelinquency', bureau, dofdText, dofdRow?.page ?? row.page, dofdRow?.yMin ?? row.yMin) as ParserValue<string> : unknownDateOfFirstDelinquency(bureau, row.page, row.yMin),
+        paymentHistory: parsePaymentHistoryRows(bureau, paymentHistoryRows, bureauOf),
+        remarks,
+        specialCommentCodes,
       })
     }
   }
@@ -268,6 +314,10 @@ function buildTradelinesFromBalanceRows(words: Word[]): ParserTradeline[] {
           status: rowValue<string>(bureau, 'status', null, '', word.page, word.yMin, 0, 'unknown'),
           opened: rowValue<string>(bureau, 'opened', null, '', word.page, word.yMin, 0, 'unknown'),
           updated: rowValue<string>(bureau, 'updated', null, '', word.page, word.yMin, 0, 'unknown'),
+          dateOfFirstDelinquency: unknownDateOfFirstDelinquency(bureau, word.page, word.yMin),
+          paymentHistory: [],
+          remarks: [],
+          specialCommentCodes: [],
         })
       }
     }

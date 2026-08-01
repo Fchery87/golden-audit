@@ -191,6 +191,36 @@ test('ticket 07 suppression: low-confidence evidence does not create a weak find
   const { platform, sessionId, workspace } = await setup(); const initialized = await platform.initializeUpload(sessionId, workspace.id); const upload = await platform.completeUpload({ uploadId: initialized.id, token: initialized.token, fileName: 'low.html', mediaType: 'text/html', bytes: Buffer.from(`<html>GOLDEN-AUDIT-REPORT:${JSON.stringify(lowConfidence)}</body></html>`) }); const report = await platform.parseReport(sessionId, upload.id); await platform.completeReview(sessionId, report.id); const match = (await platform.proposeMatches(sessionId, report.id))[0]!; await platform.decideMatch(sessionId, match.id, 'confirmed', 'fixture'); const analysis = await platform.runAnalysis(sessionId, report.id, publishFixtureRules(platform), 'US-CA'); assert.equal(analysis.findings.length, 0); assert.equal(analysis.audit[0]?.outcome, 'suppressed')
 })
 
+test('Phase 5: supported Slice 2 values survive parsing, review lookup, report coverage, and masked export without a DOFD finding', async () => {
+  const sliceTwoInput = {
+    ...structuredClone(reportInput),
+    tradelines: structuredClone(reportInput.tradelines).map((line, index) => ({ ...line, dateOfFirstDelinquency: index === 0 ? '2021-02' : undefined, paymentHistory: [{ yearMonth: '2026-01', status: 'C' }, { yearMonth: '2025-12', status: '30' }], remarks: ['Consumer disputes this account'], specialCommentCodes: ['AW'] })),
+  }
+  const { platform, sessionId, workspace } = await setup()
+  const initialized = await platform.initializeUpload(sessionId, workspace.id)
+  const upload = await platform.completeUpload({ uploadId: initialized.id, token: initialized.token, fileName: 'slice-two.html', mediaType: 'text/html', bytes: Buffer.from(`<html>GOLDEN-AUDIT-REPORT:${JSON.stringify(sliceTwoInput)}</body></html>`) })
+  const report = await platform.parseReport(sessionId, upload.id)
+  const first = report.tradelines[0]!
+  assert.equal(first.dateOfFirstDelinquency.normalized, '2021-02')
+  assert.deepEqual(first.paymentHistory.map(cell => cell.yearMonth), ['2026-01', '2025-12'])
+  assert.equal(first.remarks[0]?.normalized, 'Consumer disputes this account')
+  assert.equal(first.specialCommentCodes[0]?.normalized, 'AW')
+  assert.equal((await platform.getSourceSnippet(sessionId, report.id, first.specialCommentCodes[0]!.id)).locator, '0:specialCommentCode:0')
+  await platform.completeReview(sessionId, report.id)
+  const match = (await platform.proposeMatches(sessionId, report.id))[0]!
+  await platform.decideMatch(sessionId, match.id, 'confirmed', 'fixture')
+  const analysis = await platform.runAnalysis(sessionId, report.id, publishFixtureRules(platform), 'US-CA')
+  const consumerReport = await platform.createConsumerReport(sessionId, analysis.id)
+  const fields = new Map(consumerReport.content?.parserFields.map(field => [field.field, field]))
+  assert.equal(fields.get('dateOfFirstDelinquency')?.capability, 'supported')
+  assert.equal(fields.get('paymentHistory')?.states.known, 4)
+  assert.equal(fields.get('remarks')?.states.known, 2)
+  assert.equal(fields.get('specialCommentCodes')?.states.known, 2)
+  assert.equal(consumerReport.findings.some(finding => /delinquen|re-aging/i.test(finding.title)), false)
+  const exported = await platform.createExport(sessionId, consumerReport.id)
+  assert.match(exported.content, /dateOfFirstDelinquency/)
+  assert.match(exported.content, /paymentHistory/)
+})
 test('tickets 09-10: masked idempotent export, scoped deletion, and safe narration fallback', async () => {
   const { platform, sessionId, workspace } = await setup(); const { report } = await uploadAndParse(platform, sessionId, workspace.id); await platform.completeReview(sessionId, report.id); const match = (await platform.proposeMatches(sessionId, report.id))[0]!; await platform.decideMatch(sessionId, match.id, 'confirmed', 'verified'); const analysis = await platform.runAnalysis(sessionId, report.id, publishFixtureRules(platform), 'US-CA'); const consumerReport = await platform.createConsumerReport(sessionId, analysis.id)
   const firstExport = await platform.createExport(sessionId, consumerReport.id); const secondExport = await platform.createExport(sessionId, consumerReport.id); assert.equal(firstExport.id, secondExport.id); assert.doesNotMatch(firstExport.content, /12345678|\b\d{9}\b/); assert.match(firstExport.content, /Educational information only/)

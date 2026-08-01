@@ -19,6 +19,8 @@ export type ParserValue<T> = {
   source: SourceReference
 }
 
+export type ParserPaymentHistoryCell = ParserValue<string> & { yearMonth: string }
+
 export type ParserTradeline = {
   id: string
   bureau: Bureau
@@ -31,6 +33,10 @@ export type ParserTradeline = {
   status: ParserValue<string>
   opened: ParserValue<string>
   updated: ParserValue<string>
+  dateOfFirstDelinquency: ParserValue<string>
+  paymentHistory: ParserPaymentHistoryCell[]
+  remarks: ParserValue<string>[]
+  specialCommentCodes: ParserValue<string>[]
 }
 
 export type ParserReport = {

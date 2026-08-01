@@ -314,11 +314,11 @@ The highest-uncertainty item gated the most work, so it went first.
 - D9: the web report has one document component for screen and print. Browser Print / Save as PDF retains the readings, authority links, findings, coverage, parser disclosure, and limitations. Download my data retrieves a versioned, guarded, identifier-masked JSON projection of the complete report snapshot.
 - Operations: the Cloudflare rollout procedure now applies migration 004 before the Pages consumer surface is deployed.
 
-### Phase 5 — Full depth
+### Phase 5 — Full depth — implementation complete; real-sample validation pending
 
-- D4 slice 2: DOFD, payment-history grid, remarks, special comment codes.
-- D1 framing for re-aging worked out **before** DOFD findings are emitted.
-- Coverage table rows flip from unsupported to supported.
+- D4 slice 2: the parser and report data model support explicit DOFD values, explicitly date-keyed payment-history cells, account-level remarks, and special comment codes. All retain independent provenance and strict unavailable states; coverage now reports these as supported fields.
+- D1 decision: **no re-aging or DOFD Finding in this slice.** A single report cannot show a date moving over time. A later longitudinal feature must provide reliable cross-report account matching, human-reviewed educational content, explicit alternative explanations, and verification guidance before any potential movement observation is considered.
+- The authorized four local PDFs are unavailable in this checkout, so their required structural/availability validation remains a release-evidence task; no claim of successful real-sample extraction is made.
 
 ---
 
