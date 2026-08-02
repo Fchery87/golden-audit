@@ -79,9 +79,45 @@ owns that case, and trimming here would hide its failure. Employer values must c
 trailing ZIP row from the address block above cannot be published as an employment record.
 
 
-## Fallback structural-row guard
+## Label/value boundary (revised 2026-08-02)
 
-The balance-row fallback exists only for older layouts missing account-block balance coverage. It rejects structural field labels such as `Last Reported` before it evaluates positional values, so dates in an account detail label cannot become an account-like fallback row. Account-block parsing remains the sole source of `updated` values. This guard is covered by a synthetic positional regression; controlled validation against authorized local reports remains required before release.
+**The boundary between a row's label and its per-bureau values is derived from the detected columns,
+not from a fixed x.** The bureau columns move between templates — TransUnion's x-centre is ≈241 in
+one authorized sample and ≈308 in another — so a fixed cut lands on the wrong side of the label in
+both directions:
+
+- **Too far right:** every label word is nearest to the first column and is bucketed into it. The
+  TransUnion cell for an account then reads `Account Type: Revolving` while Experian and Equifax
+  read `Revolving`. Measured before the fix: **100% of TransUnion tradelines carried their own label
+  as the value**, so every cross-bureau string comparison compared a label against a bare value.
+- **Too far left:** the joined label no longer matches its field pattern and the whole account block
+  goes undetected.
+
+The boundary is `min(detected column x) - 60`, the same rule the Personal Information reader already
+used. When no bureau header row is found (synthetic fixtures, unknown templates) there is nothing to
+derive it from, so the legacy fixed cut is retained rather than guessed at.
+
+## Fallback structural-row guard (revised 2026-08-02)
+
+The balance-row fallback exists only for older layouts missing account-block balance coverage.
+Account-block parsing remains the sole source of `updated` values.
+
+Two rules gate it, both structural facts about this format rather than a list of known label names:
+
+1. **A row whose label cell ends in a colon is not an account.** Every field label in this format
+   ends in a colon; a creditor name does not. This replaces an allowlist of known labels, which is
+   what let the Summary section's own tallies through.
+2. **A bare integer is not a currency amount.** The fallback requires an explicit `$`. Masked
+   account numbers, term counts, the payment-history `Year` header, and every Summary tally are
+   bare integers rendered per bureau, and all of them parsed as money.
+
+Measured on the authorized samples before these rules: one report emitted **33 tradelines of which
+28 were fabricated** — 8 × `Year`, 3 × `Account #`, 3 × `Monthly Payment`, 3 × `No. of Months
+(Terms)`, plus one each of `Total/Open/Closed Accounts`, `Delinquent`, `Derogatory`, `Collection`,
+`Balances`, `Payments`, `Public Records`, `Inquiries`, and `Credit Score`. Those fabricated rows
+were also the **only** source of cross-bureau balance differences in the whole corpus; no real
+account in these four reports disagrees on balance across bureaus. Covered by synthetic positional
+regressions in `tests/parser-identityiq.test.ts`; the four-sample smoke gate still applies.
 
 ## DECISIVE FINDING — IdentityIQ saved HTML is a template shell (no per-account data)
 

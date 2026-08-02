@@ -51,6 +51,7 @@ async function confirmAllReviewValues(platform: CreditAnalysisPlatform, sessionI
 
 test('measurement: real-sample finding magnitude distribution (structure-only)', { skip: !hasBin }, async () => {
   let totalFindings = 0; let checkedAny = false; const rows: string[] = []
+  const chainRan: string[] = []
   for (const path of PDFS) {
     if (!existsSync(path)) continue
     checkedAny = true
@@ -90,9 +91,21 @@ test('measurement: real-sample finding magnitude distribution (structure-only)',
       if (f.severity === 'low') downRanked += 1
     }
     totalFindings += analysis.findings.length
+    const bureaus = new Set(report.tradelines.map(line => line.creditor.bureau))
+    if (report.tradelines.length > 0 && bureaus.size === 3 && confirmable.length > 0) chainRan.push(path)
     rows.push(`  ${path.split('/').pop()?.padEnd(46)} tradelines=${String(report.tradelines.length).padStart(3)} matches=${String(proposed.length).padStart(3)} confirmed<=3=${String(confirmable.length).padStart(3)} withheld>3=${String(withheldCollisionSets).padStart(3)} findings=${String(analysis.findings.length).padStart(3)} down-ranked=${String(downRanked).padStart(3)} | <$10(timing)=${bins['<$10']} $10-100=${bins['$10-100']} $100-1k=${bins['$100-1k']} >$1k(material)=${bins['>$1k']}`)
   }
   if (!checkedAny) return // all files absent (gitignored) -> pass vacuously in CI
   console.log('  [real-sample measurement]\n' + rows.join('\n'))
-  assert.ok(totalFindings > 0, 'expected at least one balance-difference finding across the real samples')
+
+  // This asserted `totalFindings > 0` until the fallback parser was gated on an explicit currency
+  // marker. Measured against all four samples, every balance difference the chain had ever produced
+  // came from a fabricated row — masked account numbers, `Monthly Payment`, `No. of Months (Terms)`,
+  // and the payment-history `Year` header, all read as currency because a bare integer parsed as an
+  // amount. No real account in this corpus disagrees on balance across bureaus. Requiring a finding
+  // therefore required the defect, so the canary now asserts what it can honestly check: that the
+  // parse → match → analyze chain reaches a confirmed tri-bureau match on every sample. Findings
+  // that DO occur are still held to the structural assertions above.
+  assert.deepEqual(chainRan, PDFS.filter(path => existsSync(path)),
+    'every present sample must parse to tri-bureau tradelines and yield at least one confirmed match')
 })

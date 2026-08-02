@@ -234,6 +234,37 @@ test('identityiq-pdf: dynamic column detection — maps non-standard (2023-style
   assert.equal(byBureau.get('transunion')?.balance.normalized, 11100)
   assert.equal(byBureau.get('experian')?.balance.normalized, 22200)
   assert.equal(byBureau.get('equifax')?.balance.normalized, 33300)
+
+  // The label/value boundary moves with the detected columns. When it did not, every label word was
+  // nearest to the first column and became that bureau's value: TransUnion alone stored
+  // "Account #: 12340000****" and "Account Status: Open" while the other two stored the value only,
+  // so every cross-bureau string comparison was comparing a label against a bare value.
+  assert.equal(byBureau.get('transunion')?.maskedAccount, '12340000****')
+  assert.equal(byBureau.get('transunion')?.status.normalized, 'Open')
+  assert.deepEqual(
+    [...byBureau.values()].map(line => line.status.normalized),
+    ['Open', 'Open', 'Open'],
+    'no bureau carries its own label as a value',
+  )
+})
+
+test('identityiq-pdf: summary tallies and payment-grid headers are not accounts', () => {
+  // Every one of these rows became a tradeline on the authorized samples — 28 of one report's 33.
+  // A bare integer is not an amount: masked account numbers, term counts, the payment-history year
+  // header, and the Summary section's own tallies are all bare integers rendered per bureau.
+  const words = [
+    word(1, 225, 100, 275, 112, 'TransUnion'), word(1, 356, 100, 406, 112, 'Experian'), word(1, 488, 100, 538, 112, 'Equifax'),
+    word(1, 130, 130, 200, 142, 'Total'), word(1, 205, 130, 250, 142, 'Accounts:'),
+    word(1, 260, 130, 280, 142, '12'), word(1, 380, 130, 400, 142, '9'), word(1, 510, 130, 530, 142, '9'),
+    word(1, 130, 150, 200, 162, 'Balances:'),
+    word(1, 260, 150, 300, 162, '$12,345.00'), word(1, 380, 150, 420, 162, '$12,300.00'), word(1, 510, 150, 550, 162, '$9,000.00'),
+    word(1, 130, 170, 180, 182, 'Year'),
+    word(1, 260, 170, 280, 182, '25'), word(1, 380, 170, 400, 182, '24'), word(1, 510, 170, 530, 182, '23'),
+    word(1, 130, 190, 190, 202, 'Account'), word(1, 195, 190, 215, 202, '#:'),
+    word(1, 260, 190, 320, 202, '111122223333'), word(1, 380, 190, 440, 202, '444455556666'), word(1, 510, 190, 570, 202, '777788889999'),
+  ]
+  const report = parseIdentityIqPdf(words)
+  assert.deepEqual(report.tradelines, [], 'no structural or summary row may become an account')
 })
 
 const REAL_PDFS = [

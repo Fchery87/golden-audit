@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import type { Bureau, ParserInquiry, ParserPaymentHistoryCell, ParserPersonalInformation, ParserReport, ParserScore, ParserTradeline, ParserValue } from './types.js'
 import { emptyPersonalInformation } from './types.js'
-import { bureauForX, detectBureauColumns, nearestBureau, CREDITOR_X_MAX, xCenter, type Word } from './positional-types.js'
+import { bureauForX, detectBureauColumns, nearestBureau, xCenter, type Word } from './positional-types.js'
 
 /**
  * IdentityIQ tri-bureau PDF adapter.
@@ -22,6 +22,34 @@ const HEADER_VOCAB = new Set([
 const LEFT_LABEL_X_MAX = 220
 const BLOCK_ROW_BAND = 4
 const FIELD_CONFIDENCE = 1
+
+/**
+ * Distance left of the first bureau column within which a word is a label, not a value.
+ *
+ * The bureau columns are detected per report because their x-centres move between templates
+ * (TransUnion sits at ≈241 in one authorized sample and ≈308 in another), so the boundary between
+ * a row's label and its values has to move with them. A fixed cut puts a report's labels on the
+ * wrong side of it in both directions: too far right and the label's own words are assigned to the
+ * nearest column — always TransUnion — so `Account Type: Revolving` is stored as that bureau's
+ * account type; too far left and the joined label no longer matches its field pattern, so the
+ * entire account block goes undetected. Both were happening across all four samples.
+ */
+const LABEL_COLUMN_MARGIN = 60
+
+/**
+ * How a row splits into a label and its per-bureau values.
+ *
+ * When no bureau header row is found there is nothing to derive the boundary from — synthetic
+ * fixtures and odd templates — so the legacy fixed cut is retained rather than guessed at.
+ */
+type Layout = { isLabelWord: (word: Word) => boolean; bureauOf: (x: number) => Bureau | null }
+
+function columnLayout(words: Word[]): Layout {
+  const columns = detectBureauColumns(words)
+  if (!columns) return { isLabelWord: word => word.xMin < LEFT_LABEL_X_MAX, bureauOf: bureauForX }
+  const boundary = Math.min(...columns.map(column => column.x)) - LABEL_COLUMN_MARGIN
+  return { isLabelWord: word => xCenter(word) < boundary, bureauOf: x => (x < boundary ? null : nearestBureau(x, columns)) }
+}
 
 type BureauValueMap = Partial<Record<Bureau, Word[]>>
 type Row = { page: number; yMin: number; words: Word[] }
@@ -76,8 +104,13 @@ function groupRows(words: Word[]): Row[] {
   return rows.sort((a, b) => a.page - b.page || a.yMin - b.yMin)
 }
 
+/** The legacy fixed cut. Retained for the score reader, which derives its own column cutoff. */
 function leftLabel(row: Row): string {
   return row.words.filter(w => w.xMin < LEFT_LABEL_X_MAX).map(w => w.text).join(' ').replace(/\s+/g, ' ').trim().toLowerCase()
+}
+
+function labelText(row: Row, layout: Layout): string {
+  return row.words.filter(layout.isLabelWord).map(word => word.text).join(' ').replace(/\s+/g, ' ').trim().toLowerCase()
 }
 
 function bureauWordBuckets(row: Row, bureauOf: (x: number) => Bureau | null): BureauValueMap {
@@ -95,15 +128,15 @@ function joined(words: Word[] | undefined): string {
   return (words ?? []).map(word => word.text).join(' ').replace(/\s+/g, ' ').trim()
 }
 
-function findCreditor(rows: Row[], startIndex: number, bureauOf: (x: number) => Bureau | null): { text: string; row: Row } | undefined {
+function findCreditor(rows: Row[], startIndex: number, layout: Layout): { text: string; row: Row } | undefined {
   const accountRow = rows[startIndex]
   if (!accountRow) return undefined
   for (let i = startIndex - 1; i >= 0; i -= 1) {
     const row = rows[i]
-    if (!row || row.page !== accountRow.page || isAccountStart(row, bureauOf)) break
-    const label = leftLabel(row)
+    if (!row || row.page !== accountRow.page || isAccountStart(row, layout)) break
+    const label = labelText(row, layout)
     if (!label || HEADER_VOCAB.has(label)) continue
-    const hasBureauValues = row.words.some(word => word.xMin >= LEFT_LABEL_X_MAX)
+    const hasBureauValues = row.words.some(word => !layout.isLabelWord(word))
     if (hasBureauValues) continue
     const text = cleanCreditor(row.words.map(w => w.text))
     if (text) return { text, row }
@@ -111,9 +144,9 @@ function findCreditor(rows: Row[], startIndex: number, bureauOf: (x: number) => 
   return undefined
 }
 
-function isAccountStart(row: Row, bureauOf: (x: number) => Bureau | null): boolean {
-  if (!/^account\s+#:?$/i.test(leftLabel(row))) return false
-  const buckets = bureauWordBuckets(row, bureauOf)
+function isAccountStart(row: Row, layout: Layout): boolean {
+  if (!/^account\s+#:?$/i.test(labelText(row, layout))) return false
+  const buckets = bureauWordBuckets(row, layout.bureauOf)
   return (['transunion', 'experian', 'equifax'] as const)
     .filter(bureau => joined(buckets[bureau]).length > 0).length >= 2
 }
@@ -175,8 +208,8 @@ function unknownDateOfFirstDelinquency(bureau: Bureau, page: number, yMin: numbe
   return rowValue<string>(bureau, 'dateOfFirstDelinquency', null, '', page, yMin, 0, 'unknown')
 }
 
-function parsePaymentHistoryRows(bureau: Bureau, rows: Row[], bureauOf: (x: number) => Bureau | null): ParserPaymentHistoryCell[] {
-  const cells = rows.flatMap(row => parseRepeatedValues('paymentHistory', bureau, joined(bureauWordBuckets(row, bureauOf)[bureau]), row.page, row.yMin) as ParserPaymentHistoryCell[])
+function parsePaymentHistoryRows(bureau: Bureau, rows: Row[], layout: Layout): ParserPaymentHistoryCell[] {
+  const cells = rows.flatMap(row => parseRepeatedValues('paymentHistory', bureau, joined(bureauWordBuckets(row, layout.bureauOf)[bureau]), row.page, row.yMin) as ParserPaymentHistoryCell[])
   const counts = new Map<string, number>()
   for (const cell of cells) counts.set(cell.yearMonth, (counts.get(cell.yearMonth) ?? 0) + 1)
   return cells.filter(cell => counts.get(cell.yearMonth) === 1)
@@ -184,15 +217,14 @@ function parsePaymentHistoryRows(bureau: Bureau, rows: Row[], bureauOf: (x: numb
 
 function buildTradelinesFromAccountBlocks(words: Word[]): ParserTradeline[] {
   const tradelines: ParserTradeline[] = []
-  const detected = detectBureauColumns(words)
-  const bureauOf = (x: number) => (detected ? nearestBureau(x, detected) : bureauForX(x))
+  const layout = columnLayout(words)
   const rows = groupRows(words)
 
   for (let index = 0; index < rows.length; index += 1) {
     const row = rows[index]
-    if (!row || !isAccountStart(row, bureauOf)) continue
+    if (!row || !isAccountStart(row, layout)) continue
 
-    const creditor = findCreditor(rows, index, bureauOf)
+    const creditor = findCreditor(rows, index, layout)
     if (!creditor) continue
 
     const fieldRows = new Map<FieldName, Row>()
@@ -201,8 +233,8 @@ function buildTradelinesFromAccountBlocks(words: Word[]): ParserTradeline[] {
     for (let cursor = index + 1; cursor < rows.length; cursor += 1) {
       const candidate = rows[cursor]
       if (!candidate || candidate.page !== row.page) break
-      if (isAccountStart(candidate, bureauOf)) break
-      const label = leftLabel(candidate)
+      if (isAccountStart(candidate, layout)) break
+      const label = labelText(candidate, layout)
       if (/^account\s+type:?$/i.test(label)) fieldRows.set('accountType', candidate)
       else if (/^account\s+status:?$/i.test(label)) fieldRows.set('status', candidate)
       else if (/^date\s+opened:?$/i.test(label)) fieldRows.set('opened', candidate)
@@ -218,7 +250,7 @@ function buildTradelinesFromAccountBlocks(words: Word[]): ParserTradeline[] {
     }
 
     const fieldMaps = new Map<FieldName, BureauValueMap>()
-    for (const [field, sourceRow] of fieldRows) fieldMaps.set(field, bureauWordBuckets(sourceRow, bureauOf))
+    for (const [field, sourceRow] of fieldRows) fieldMaps.set(field, bureauWordBuckets(sourceRow, layout.bureauOf))
     const presentBureaus = new Set<Bureau>()
     for (const buckets of fieldMaps.values()) {
       for (const bureau of ['transunion', 'experian', 'equifax'] as const) {
@@ -241,8 +273,8 @@ function buildTradelinesFromAccountBlocks(words: Word[]): ParserTradeline[] {
       const paymentHistoryRows = repeatedRows.get('paymentHistory') ?? []
       const remarksRows = repeatedRows.get('remarks') ?? []
       const specialCommentCodesRows = repeatedRows.get('specialCommentCodes') ?? []
-      const remarks = remarksRows.flatMap(sourceRow => parseRepeatedValues('remarks', bureau, joined(bureauWordBuckets(sourceRow, bureauOf)[bureau]), sourceRow.page, sourceRow.yMin))
-      const specialCommentCodes = specialCommentCodesRows.flatMap(sourceRow => parseRepeatedValues('specialCommentCodes', bureau, joined(bureauWordBuckets(sourceRow, bureauOf)[bureau]), sourceRow.page, sourceRow.yMin))
+      const remarks = remarksRows.flatMap(sourceRow => parseRepeatedValues('remarks', bureau, joined(bureauWordBuckets(sourceRow, layout.bureauOf)[bureau]), sourceRow.page, sourceRow.yMin))
+      const specialCommentCodes = specialCommentCodesRows.flatMap(sourceRow => parseRepeatedValues('specialCommentCodes', bureau, joined(bureauWordBuckets(sourceRow, layout.bureauOf)[bureau]), sourceRow.page, sourceRow.yMin))
       const balance = parseField('balance', bureau, balanceText, row.page, row.yMin) as ParserValue<number>
       // The adapter only emits a tradeline when the account block contains a usable balance.
       // This preserves the original parser's strict, money-row-backed account boundary and
@@ -261,7 +293,7 @@ function buildTradelinesFromAccountBlocks(words: Word[]): ParserTradeline[] {
         opened: parseField('opened', bureau, openedText, row.page, row.yMin) as ParserValue<string>,
         updated: parseField('updated', bureau, updatedText, row.page, row.yMin) as ParserValue<string>,
         dateOfFirstDelinquency: dofdText ? parseField('dateOfFirstDelinquency', bureau, dofdText, dofdRow?.page ?? row.page, dofdRow?.yMin ?? row.yMin) as ParserValue<string> : unknownDateOfFirstDelinquency(bureau, row.page, row.yMin),
-        paymentHistory: parsePaymentHistoryRows(bureau, paymentHistoryRows, bureauOf),
+        paymentHistory: parsePaymentHistoryRows(bureau, paymentHistoryRows, layout),
         remarks,
         specialCommentCodes,
       })
@@ -271,15 +303,30 @@ function buildTradelinesFromAccountBlocks(words: Word[]): ParserTradeline[] {
   return tradelines
 }
 
-function isFallbackStructuralLabel(row: Word[]): boolean {
-  const label = row.filter(word => word.xMin < LEFT_LABEL_X_MAX).map(word => word.text).join(' ').replace(/\s+/g, ' ').trim().toLowerCase().replace(/:$/, '')
-  return /^(account\s*#?|account|account type|account status|balance|credit limit|high credit|past due|last reported|date opened|date of first delinquency|payment history|remarks|special comment codes?)$/.test(label)
+/**
+ * Every field label in this format ends in a colon; a creditor name does not. That is the whole
+ * distinction between an account's balance row and a structural row, and it holds across templates
+ * — unlike the allowlist of known label names this replaces, which is what let the Summary
+ * section's own tallies through as accounts.
+ */
+function isFallbackStructuralLabel(row: Word[], layout: Layout): boolean {
+  return row.filter(word => layout.isLabelWord(word)).map(word => word.text).join(' ').replace(/\s+/g, ' ').trim().endsWith(':')
+}
+
+/**
+ * Currency as this format renders it. The fallback must not read a bare integer as an amount: the
+ * payment-history year header (`Year 25 24 23 …`), a term count, a masked account number, and every
+ * Summary tally are bare integers, and on the authorized samples each one became an account —
+ * 28 of one report's 33 "tradelines" were headers and summary totals. The account-block path is
+ * unaffected: there the row is already known to be a balance row from its own label.
+ */
+function parseFallbackMoney(cell: string): { minor: number | null } {
+  return cell.includes('$') ? parseMoney(cell) : { minor: null }
 }
 
 function buildTradelinesFromBalanceRows(words: Word[]): ParserTradeline[] {
   const tradelines: ParserTradeline[] = []
-  const detected = detectBureauColumns(words)
-  const bureauOf = (x: number) => (detected ? nearestBureau(x, detected) : bureauForX(x))
+  const layout = columnLayout(words)
 
   const byPage = new Map<number, Word[]>()
   for (const w of words) {
@@ -297,17 +344,18 @@ function buildTradelinesFromBalanceRows(words: Word[]): ParserTradeline[] {
     }
 
     for (const row of rows) {
-      if (isFallbackStructuralLabel(row)) continue
+      if (isFallbackStructuralLabel(row, layout)) continue
       const bureauMoney = new Map<Bureau, { word: Word; minor: number }>()
       for (const w of row) {
-        const bureau = bureauOf(xCenter(w))
+        if (layout.isLabelWord(w)) continue
+        const bureau = layout.bureauOf(xCenter(w))
         if (!bureau) continue
-        const { minor } = parseMoney(w.text)
+        const { minor } = parseFallbackMoney(w.text)
         if (minor !== null) bureauMoney.set(bureau, { word: w, minor })
       }
       if (bureauMoney.size < 2) continue
 
-      const creditor = cleanCreditor(row.filter(w => xCenter(w) < CREDITOR_X_MAX).map(w => w.text))
+      const creditor = cleanCreditor(row.filter(w => layout.isLabelWord(w)).map(w => w.text))
       if (!creditor) continue
 
       for (const [bureau, { word, minor }] of bureauMoney) {
@@ -540,9 +588,6 @@ export function normalizeAddressForComparison(display: string): string {
  *     discarded rather than emitted as a partial address.
  */
 
-/** Distance left of the first bureau column within which a word is a label, not a value. Set from
- *  the observed gap in the samples (labels end ≈157, values begin ≈202) with margin on both sides. */
-const PERSONAL_LABEL_MARGIN = 60
 const ZIP_TOKEN = /^\d{5}(-\d{4})?$/
 const DATE_TOKEN = /^\d{1,2}\/(\d{1,2}\/)?\d{2,4}$/
 /** Page furniture that lands inside the section's row range on a page break. */
@@ -577,7 +622,7 @@ function personalSectionColumns(rows: Row[], anchorIndex: number): { headerIndex
     if (columns.size !== 3) continue
     const anchors = [...columns].map(([bureau, x]) => ({ bureau, x }))
     const firstColumnX = Math.min(...anchors.map(column => column.x))
-    return { headerIndex: index, bureauOf: (x: number) => (x < firstColumnX - PERSONAL_LABEL_MARGIN ? null : nearestBureau(x, anchors)) }
+    return { headerIndex: index, bureauOf: (x: number) => (x < firstColumnX - LABEL_COLUMN_MARGIN ? null : nearestBureau(x, anchors)) }
   }
   return undefined
 }
@@ -616,9 +661,9 @@ function parseIdentityIqPersonalInformation(words: Word[]): ParserPersonalInform
   }
 
   const labelOf = (row: Row): PersonalLabel | undefined => {
-    const labelText = row.words.filter(word => bureauOf(xCenter(word)) === null).map(word => word.text).join(' ').replace(/\s+/g, ' ').trim()
-    if (!labelText.includes(':')) return undefined
-    const name = labelText.slice(0, labelText.indexOf(':')).trim().toLowerCase()
+    const label = row.words.filter(word => bureauOf(xCenter(word)) === null).map(word => word.text).join(' ').replace(/\s+/g, ' ').trim()
+    if (!label.includes(':')) return undefined
+    const name = label.slice(0, label.indexOf(':')).trim().toLowerCase()
     return PERSONAL_LABELS.find(entry => entry.re.test(name))
   }
 
