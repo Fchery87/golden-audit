@@ -3,6 +3,13 @@ dist/
 database/local/
 *.log
 
+# Local runtime state and consumer uploads — never commit (may contain PII).
+.scratch/runtime/
+
+# Generated agent and harness execution artifacts.
+.pi-subagents/artifacts/
+.harness/evolution/
+
 # Real consumer credit reports — NEVER commit (real PII).
 # These are processed locally only, under the trust-boundary controls in ticket 12
 docs/reports/
