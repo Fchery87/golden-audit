@@ -131,9 +131,11 @@ function joined(words: Word[] | undefined): string {
 function findCreditor(rows: Row[], startIndex: number, layout: Layout): { text: string; row: Row } | undefined {
   const accountRow = rows[startIndex]
   if (!accountRow) return undefined
+  // The creditor name precedes its `Account #:` row, and that pairing survives a page break too, so
+  // the search stops at the previous account or the section heading rather than at the page edge.
   for (let i = startIndex - 1; i >= 0; i -= 1) {
     const row = rows[i]
-    if (!row || row.page !== accountRow.page || isAccountStart(row, layout)) break
+    if (!row || isAccountStart(row, layout) || isSectionAnchor(row)) break
     const label = labelText(row, layout)
     if (!label || HEADER_VOCAB.has(label)) continue
     const hasBureauValues = row.words.some(word => !layout.isLabelWord(word))
@@ -142,6 +144,14 @@ function findCreditor(rows: Row[], startIndex: number, layout: Layout): { text: 
     if (text) return { text, row }
   }
   return undefined
+}
+
+/**
+ * A section heading. IdentityIQ renders `Back to Top` on every one, which makes it the reliable
+ * end-of-section marker — and the only thing besides the next account that should stop a block.
+ */
+function isSectionAnchor(row: Row): boolean {
+  return /back to top/i.test(row.words.map(word => word.text).join(' '))
 }
 
 function isAccountStart(row: Row, layout: Layout): boolean {
@@ -230,10 +240,14 @@ function buildTradelinesFromAccountBlocks(words: Word[]): ParserTradeline[] {
     const fieldRows = new Map<FieldName, Row>()
     const repeatedRows = new Map<RepeatedFieldName, Row[]>()
     fieldRows.set('maskedAccount', row)
+    // An account block runs until the next account or the end of the section — not until the end of
+    // the page. IdentityIQ paginates mid-block: the rows continuing an account reappear at the top
+    // of the next page with no repeated bureau header and no heading. Stopping at the page edge cut
+    // those blocks off before their Balance row, and a block with no balance row lost every bureau.
     for (let cursor = index + 1; cursor < rows.length; cursor += 1) {
       const candidate = rows[cursor]
-      if (!candidate || candidate.page !== row.page) break
-      if (isAccountStart(candidate, layout)) break
+      if (!candidate) break
+      if (isAccountStart(candidate, layout) || isSectionAnchor(candidate)) break
       const label = labelText(candidate, layout)
       if (/^account\s+type:?$/i.test(label)) fieldRows.set('accountType', candidate)
       else if (/^account\s+status:?$/i.test(label)) fieldRows.set('status', candidate)
@@ -275,11 +289,15 @@ function buildTradelinesFromAccountBlocks(words: Word[]): ParserTradeline[] {
       const specialCommentCodesRows = repeatedRows.get('specialCommentCodes') ?? []
       const remarks = remarksRows.flatMap(sourceRow => parseRepeatedValues('remarks', bureau, joined(bureauWordBuckets(sourceRow, layout.bureauOf)[bureau]), sourceRow.page, sourceRow.yMin))
       const specialCommentCodes = specialCommentCodesRows.flatMap(sourceRow => parseRepeatedValues('specialCommentCodes', bureau, joined(bureauWordBuckets(sourceRow, layout.bureauOf)[bureau]), sourceRow.page, sourceRow.yMin))
+      // A balance is a field of the account, not the definition of one. This used to drop the whole
+      // tradeline when the balance was missing, because the balance row was the only thing anchoring
+      // an account block against section and header rows becoming tradelines. That job now belongs
+      // to `isAccountStart` — which requires an `Account #:` label carrying values in at least two
+      // bureau columns — and to the fallback's own guards, so a real account that reports no balance
+      // (a paid or closed account rendering "-") is emitted with the balance left `unknown`. Rules
+      // that need a balance suppress on the missing value and say so, which is the point of the
+      // provenance model; discarding the account instead hid it from every other check as well.
       const balance = parseField('balance', bureau, balanceText, row.page, row.yMin) as ParserValue<number>
-      // The adapter only emits a tradeline when the account block contains a usable balance.
-      // This preserves the original parser's strict, money-row-backed account boundary and
-      // prevents section/header blocks from becoming unknown-value tradelines.
-      if (balance.normalized === null) continue
       tradelines.push({
         id: randomUUID(),
         bureau,

@@ -248,6 +248,53 @@ test('identityiq-pdf: dynamic column detection — maps non-standard (2023-style
   )
 })
 
+test('identityiq-pdf: an account block continues across a page break but stops at the next section', () => {
+  // IdentityIQ paginates mid-account: the remaining field rows resume at the top of the next page
+  // with no repeated bureau header and no heading. Ending the block at the page edge cut it off
+  // before its Balance row on 4 accounts across the authorized samples.
+  const report = parseIdentityIqPdf([
+    word(1, 130, 340, 210, 352, 'Page Break Bank'),
+    word(1, 150, 360, 190, 372, 'Account'), word(1, 195, 360, 215, 372, '#:'),
+    word(1, 225, 360, 270, 372, '33334444****'), word(1, 356, 360, 401, 372, '33334444****'), word(1, 488, 360, 533, 372, '33334444****'),
+    word(1, 150, 374, 200, 386, 'Account'), word(1, 205, 374, 245, 386, 'Status:'),
+    word(1, 225, 374, 260, 386, 'Open'), word(1, 356, 374, 391, 386, 'Open'), word(1, 488, 374, 523, 386, 'Open'),
+    // …page 2 resumes the same account.
+    word(2, 160, 40, 210, 52, 'Balance:'),
+    word(2, 225, 40, 260, 52, '$300.00'), word(2, 356, 40, 391, 52, '$310.00'), word(2, 488, 40, 523, 52, '$300.00'),
+    // The section heading ends the block; a Balance row beyond it belongs to something else.
+    word(2, 210, 80, 260, 92, 'Inquiries'), word(2, 500, 80, 550, 92, 'Back'), word(2, 555, 80, 575, 92, 'to'), word(2, 580, 80, 600, 92, 'Top'),
+    word(2, 160, 100, 210, 112, 'Balance:'),
+    word(2, 225, 100, 260, 112, '$999.00'), word(2, 356, 100, 391, 112, '$999.00'), word(2, 488, 100, 523, 112, '$999.00'),
+  ])
+  const byBureau = new Map(report.tradelines.map(line => [line.bureau, line]))
+  assert.equal(report.tradelines.length, 3)
+  assert.equal(byBureau.get('transunion')?.balance.normalized, 30000, 'the balance row on the next page belongs to this account')
+  assert.equal(byBureau.get('experian')?.balance.normalized, 31000)
+  assert.equal(byBureau.get('transunion')?.status.normalized, 'Open')
+  assert.notEqual(byBureau.get('transunion')?.balance.normalized, 99900, 'the block stops at the section heading')
+})
+
+test('identityiq-pdf: an account that reports no balance is kept with the balance unknown', () => {
+  // A paid or closed account renders "-" for its balance. Dropping the tradeline hid it from every
+  // other check too; the value is marked unknown instead, so balance rules suppress and say why.
+  const report = parseIdentityIqPdf([
+    word(1, 130, 340, 210, 352, 'Paid Off Bank'),
+    word(1, 150, 360, 190, 372, 'Account'), word(1, 195, 360, 215, 372, '#:'),
+    word(1, 225, 360, 270, 372, '77778888****'), word(1, 356, 360, 401, 372, '77778888****'), word(1, 488, 360, 533, 372, '77778888****'),
+    word(1, 150, 374, 200, 386, 'Account'), word(1, 205, 374, 245, 386, 'Status:'),
+    word(1, 225, 374, 260, 386, 'Paid'), word(1, 356, 374, 391, 386, 'Paid'), word(1, 488, 374, 523, 386, 'Paid'),
+    word(1, 160, 388, 210, 400, 'Balance:'),
+    word(1, 225, 388, 260, 400, '-'), word(1, 356, 388, 391, 400, '-'), word(1, 488, 388, 523, 400, '-'),
+  ])
+  assert.equal(report.tradelines.length, 3)
+  for (const line of report.tradelines) {
+    assert.equal(line.balance.normalized, null)
+    assert.equal(line.balance.state, 'unknown', 'an absent balance is marked, never invented')
+    assert.equal(line.status.normalized, 'Paid', 'the rest of the account is still extracted')
+    assert.equal(line.maskedAccount, '77778888****')
+  }
+})
+
 test('identityiq-pdf: summary tallies and payment-grid headers are not accounts', () => {
   // Every one of these rows became a tradeline on the authorized samples — 28 of one report's 33.
   // A bare integer is not an amount: masked account numbers, term counts, the payment-history year

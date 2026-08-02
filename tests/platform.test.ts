@@ -73,10 +73,16 @@ test('wiring: completeUpload(pdf) → parseReport routes through the real Identi
     const bureaus = new Set(report.tradelines.map(t => t.balance.bureau))
     const realAdapter = report.provider === 'identityiq' && report.template === 'identityiq-pdf-v1' // NOT 'synthetic-provider'/'pilot-v1'
     const threeBureaus = bureaus.has('transunion') && bureaus.has('experian') && bureaus.has('equifax')
-    const usdBalances = report.tradelines.every(t => t.balance.currency === 'USD' && t.balance.state === 'known')
+    // Every balance is USD-denominated and its state agrees with its value. This asserted
+    // `state === 'known'` on every tradeline, which held only while the adapter discarded any
+    // account whose block carried no balance row — so a paid or closed account rendering "-" was
+    // dropped from the report entirely rather than reported with the balance left unknown.
+    const usdBalances = report.tradelines.every(t => t.balance.currency === 'USD'
+      && (t.balance.state === 'known') === (t.balance.normalized !== null))
+    const someKnownBalance = report.tradelines.some(t => t.balance.state === 'known')
     const scoreIntegrity = report.scores.length === 3 && report.scores.every(score => score.state === 'known' && score.scale.state === 'known' && Boolean(score.source.locator) && Boolean(score.scale.source.locator) && score.normalized !== null && /^\d{3}-\d{3}$/.test(score.scale.normalized ?? ''))
     const inquiryIntegrity = report.inquiries.every(inquiry => inquiry.creditor.state === 'known' && inquiry.date.state === 'known' && inquiry.date.normalized !== null && Boolean(inquiry.creditor.source.locator) && Boolean(inquiry.date.source.locator))
-    if (!realAdapter || report.tradelines.length === 0 || !threeBureaus || !usdBalances || !scoreIntegrity || !inquiryIntegrity) failed.push(`${p}: adapter=${realAdapter} tradelines=${report.tradelines.length} scores=${report.scores.length} inquiries=${report.inquiries.length} bureaus=[${[...bureaus].join(',')}]`)
+    if (!realAdapter || report.tradelines.length === 0 || !threeBureaus || !usdBalances || !someKnownBalance || !scoreIntegrity || !inquiryIntegrity) failed.push(`${p}: adapter=${realAdapter} tradelines=${report.tradelines.length} scores=${report.scores.length} inquiries=${report.inquiries.length} bureaus=[${[...bureaus].join(',')}]`)
     // assert NOTHING about balance amounts or account numbers — structure only.
   }
   if (!checkedAny) return // all real files absent (gitignored) → pass vacuously in CI

@@ -97,6 +97,22 @@ The boundary is `min(detected column x) - 60`, the same rule the Personal Inform
 used. When no bureau header row is found (synthetic fixtures, unknown templates) there is nothing to
 derive it from, so the legacy fixed cut is retained rather than guessed at.
 
+## Account block extent (revised 2026-08-02)
+
+**A block runs to the next `Account #:` row or to the end of the section, not to the end of the
+page.** IdentityIQ paginates mid-account: the remaining field rows resume at the top of the next
+page with no repeated bureau header and no heading, so there is nothing at the page edge to read as
+a boundary. Ending the block there truncated it before its `Balance` row on 4 accounts across the
+authorized samples. The section heading — which always carries `Back to Top` — is the real end
+marker, and it also bounds the backward search for the account's creditor name.
+
+**A missing balance no longer discards the account.** The balance row used to be the only thing
+anchoring a block against section and header rows becoming tradelines; that job now belongs to
+`isAccountStart` (an `Account #:` label carrying values in ≥2 bureau columns) and to the fallback
+guards below. A real account that reports no balance — a paid or closed account rendering `-` — is
+emitted with `state: 'unknown'` on the balance, so balance rules suppress with a stated reason
+rather than the account vanishing from every other check as well.
+
 ## Fallback structural-row guard (revised 2026-08-02)
 
 The balance-row fallback exists only for older layouts missing account-block balance coverage.
