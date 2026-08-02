@@ -13,9 +13,10 @@ import type {
   UploadStage, Upload, CanonicalValue, Tradeline, CanonicalReport, GovernanceStatus, GovernanceHistory,
   Authority, EducationModule, EducationModuleKind, ReviewedGovernanceCatalog, ReviewerRole, Reviewer, Rule, MatchGroup, Analysis, ActionItem,
   ReportFinding, CoverageRow, ParserFieldAvailability, ReportContent, ConsumerReport, ExportArtifact, DeletionJob, AuditEvent, PilotApprovalArea, PilotApproval, PilotGate,
+  ReportScoreRow, ReportInquiryRow, Inquiry, CanonicalScore, ConsumerValueReview, ConsumerReviewValue,
   PilotDrillResult, PilotDrill, PilotDrillEvidenceGap, PilotDrillEvidenceReport, PilotEvidenceSummary,
   PilotApprovalRecordFile, QualityLatencySummary, QualityFindingSummary, QualityMatchingSummary,
-  QualityParserSummary, QualityReportSegment, QualityReport,
+  QualityParserSummary, QualityReportSegment, QualityReport, ReportPresentationProfile, ReportRecipient, ReportAccountRow,
 } from './entities.js'
 
 export type {
@@ -23,9 +24,10 @@ export type {
   UploadStage, Upload, CanonicalValue, Tradeline, CanonicalReport, GovernanceStatus, GovernanceHistory,
   Authority, EducationModule, EducationModuleKind, ReviewedGovernanceCatalog, ReviewerRole, Reviewer, Rule, MatchGroup, Analysis, ActionItem,
   ReportFinding, CoverageRow, ParserFieldAvailability, ReportContent, ConsumerReport, ExportArtifact, DeletionJob, AuditEvent, PilotApprovalArea, PilotApproval, PilotGate,
+  ReportScoreRow, ReportInquiryRow, Inquiry, CanonicalScore,
   PilotDrillResult, PilotDrill, PilotDrillEvidenceGap, PilotDrillEvidenceReport, PilotEvidenceSummary,
   PilotApprovalRecordFile, QualityLatencySummary, QualityFindingSummary, QualityMatchingSummary,
-  QualityParserSummary, QualityReportSegment, QualityReport,
+  QualityParserSummary, QualityReportSegment, QualityReport, ReportPresentationProfile, ReportRecipient, ReportAccountRow,
 }
 export type { Finding, FindingClassification, RuleAudit, SourceReference } from './entities.js'
 export type { PlatformStore, BlobStore } from './store.js'
@@ -56,6 +58,48 @@ export const SESSION_ABSOLUTE_TTL_MS = 30 * 24 * 60 * 60 * 1000
 export const TOKEN_TTL_MS = 60 * 60 * 1000
 
 const now = () => new Date().toISOString()
+const DEFAULT_REPORT_PRESENTATION: ReportPresentationProfile = {
+  revision: 1,
+  organizationName: 'Golden Audit',
+  accent: 'gold',
+  printStyle: 'standard',
+}
+const PRESENTATION_STRING_FIELDS = ['organizationName', 'preparedByLabel', 'preparedByTitle', 'logoUrl', 'supportEmail', 'websiteUrl', 'supportPhone', 'mailingAddress', 'reportTitle', 'reportSubtitle', 'closingNote'] as const
+const OPTIONAL_PRESENTATION_FIELDS = new Set<string>(PRESENTATION_STRING_FIELDS.filter(field => field !== 'organizationName'))
+
+function presentationSnapshot(profile: ReportPresentationProfile | undefined): ReportPresentationProfile {
+  return structuredClone(profile ?? DEFAULT_REPORT_PRESENTATION)
+}
+
+function validateOptionalUrl(value: string, field: 'logoUrl' | 'websiteUrl'): void {
+  if (!value) return
+  let parsed: URL
+  try { parsed = new URL(value) } catch { throw new Error(`${field} must be a valid HTTPS URL`) }
+  if (parsed.protocol !== 'https:') throw new Error(`${field} must be a valid HTTPS URL`)
+}
+
+function validateReportPresentationProfile(input: Partial<ReportPresentationProfile>, current: ReportPresentationProfile | undefined, actorId: Id): ReportPresentationProfile {
+  const allowedKeys = new Set<string>([...PRESENTATION_STRING_FIELDS, 'accent', 'printStyle'])
+  if (Object.keys(input).some(key => !allowedKeys.has(key))) throw new Error('Profile contains an unsupported field')
+  const profile: ReportPresentationProfile = { ...presentationSnapshot(current), ...input, revision: (current?.revision ?? 0) + 1, updatedAt: now(), updatedBy: actorId }
+  for (const field of PRESENTATION_STRING_FIELDS) {
+    const value = profile[field]
+    if (typeof value !== 'string') continue
+    const trimmed = value.trim()
+    if (!trimmed && OPTIONAL_PRESENTATION_FIELDS.has(field)) { delete profile[field]; continue }
+    if (!trimmed) throw new Error('organizationName is required')
+    if (trimmed.length > 500) throw new Error(`${field} exceeds its allowed length`)
+    assertSafeConsumerOutput(trimmed)
+    profile[field] = trimmed
+  }
+  if (!profile.organizationName) throw new Error('organizationName is required')
+  if (profile.supportEmail && !/^\S+@\S+\.\S+$/.test(profile.supportEmail)) throw new Error('supportEmail must be valid')
+  if (profile.logoUrl) validateOptionalUrl(profile.logoUrl, 'logoUrl')
+  if (profile.websiteUrl) validateOptionalUrl(profile.websiteUrl, 'websiteUrl')
+  if (!['gold', 'charcoal', 'sage'].includes(profile.accent)) throw new Error('accent is invalid')
+  if (!['standard', 'compact'].includes(profile.printStyle)) throw new Error('printStyle is invalid')
+  return profile
+}
 const hashPassword = (password: string, salt: string) => scryptSync(password, salt, 32).toString('hex')
 const maskAccount = (value: string) => `••••${value.replace(/\D/g, '').slice(-4)}`
 
@@ -68,6 +112,46 @@ function maskExportValue(value: unknown): unknown {
   if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, maskExportValue(item)]))
   return value
 }
+function sourceLinkedAccountRows(tradelines: Tradeline[]): ReportAccountRow[] {
+  const fields: Array<{ key: keyof Pick<Tradeline, 'creditor' | 'accountType' | 'status' | 'balance' | 'creditLimit' | 'pastDue' | 'opened' | 'updated' | 'dateOfFirstDelinquency'>; label: string }> = [
+    { key: 'creditor', label: 'Creditor' },
+    { key: 'accountType', label: 'Account type' },
+    { key: 'status', label: 'Status' },
+    { key: 'balance', label: 'Balance' },
+    { key: 'creditLimit', label: 'Credit limit / high credit' },
+    { key: 'pastDue', label: 'Past due' },
+    { key: 'opened', label: 'Date opened' },
+    { key: 'updated', label: 'Last reported' },
+    { key: 'dateOfFirstDelinquency', label: 'Date of first delinquency' },
+  ]
+  return tradelines.map(line => ({
+    id: line.id,
+    bureau: line.creditor.bureau,
+    cells: fields.flatMap(({ key, label }) => {
+      const value = line[key]
+      if (value.state !== 'known' || value.normalized === null || !value.source.locator) return []
+      const display = typeof value.normalized === 'number' && value.currency === 'USD'
+        ? (value.normalized / 100).toLocaleString('en-US', { style: 'currency', currency: 'USD' })
+        : String(value.normalized)
+      return [{ label, value: display, source: { kind: value.source.kind, locator: value.source.locator } }]
+    }),
+  }))
+}
+
+function sourceLinkedScoreRows(scores: CanonicalScore[]): ReportScoreRow[] {
+  return scores.flatMap(score => {
+    if (score.state !== 'known' || score.normalized === null || !score.source.locator || score.scale.state !== 'known' || !score.scale.normalized || !score.scale.source.locator) return []
+    return [{ bureau: score.bureau, score: score.normalized, scoreScale: score.scale.originalDisplay || score.scale.normalized, source: { kind: score.source.kind, locator: score.source.locator }, scaleSource: { kind: score.scale.source.kind, locator: score.scale.source.locator } }]
+  })
+}
+
+function sourceLinkedInquiryRows(inquiries: Inquiry[]): ReportInquiryRow[] {
+  return inquiries.flatMap(inquiry => {
+    if (inquiry.creditor.state !== 'known' || !inquiry.creditor.normalized || inquiry.date.state !== 'known' || !inquiry.date.normalized || !inquiry.creditor.source.locator) return []
+    return [{ id: inquiry.id, bureau: inquiry.bureau, creditor: inquiry.creditor.originalDisplay || inquiry.creditor.normalized, ...(inquiry.businessType.state === 'known' && inquiry.businessType.normalized ? { businessType: inquiry.businessType.originalDisplay || inquiry.businessType.normalized } : {}), date: inquiry.date.normalized, source: { kind: inquiry.creditor.source.kind, locator: inquiry.creditor.source.locator } }]
+  })
+}
+
 function exportProjection(report: ConsumerReport) {
   const safe = maskExportValue({
     overview: report.overview,
@@ -101,6 +185,7 @@ export class CreditAnalysisPlatform {
     private store: PlatformStore = new InMemoryStore(),
     private blobStore: BlobStore = new InMemoryBlobStore(),
     catalog?: ReviewedGovernanceCatalog,
+    private ownerEmail?: string,
   ) {
     if (catalog) this.installReviewedCatalog(catalog)
   }
@@ -139,7 +224,7 @@ export class CreditAnalysisPlatform {
 
   private async createSession(userId: Id): Promise<Id> {
     const id = randomUUID(); const at = now()
-    const session: Session = { id, userId, createdAt: at, expiresAt: new Date(Date.now() + SESSION_ABSOLUTE_TTL_MS).toISOString(), lastUsedAt: at }
+    const session: Session = { id, userId, csrfToken: randomBytes(24).toString('base64url'), createdAt: at, expiresAt: new Date(Date.now() + SESSION_ABSOLUTE_TTL_MS).toISOString(), lastUsedAt: at }
     await this.store.createSession(session)
     return id
   }
@@ -194,6 +279,30 @@ export class CreditAnalysisPlatform {
     await this.audit('email-verified', consumed.userId, consumed.userId, {})
   }
 
+  async getReportPresentationProfile(sessionId: Id): Promise<ReportPresentationProfile> {
+    await this.requireSession(sessionId)
+    return presentationSnapshot(await this.store.getReportPresentationProfile())
+  }
+
+  async updateReportPresentationProfile(sessionId: Id, csrfToken: string, expectedRevision: number, input: Partial<ReportPresentationProfile>): Promise<ReportPresentationProfile> {
+    const actorId = await this.requireSessionWithCsrf(sessionId, csrfToken)
+    await this.requireOwnerSession(sessionId)
+    const current = await this.store.getReportPresentationProfile()
+    const currentSnapshot = presentationSnapshot(current)
+    if (expectedRevision !== currentSnapshot.revision) throw new Error('Profile has changed; refresh and try again')
+    const profile = validateReportPresentationProfile(input, current, actorId)
+    await this.store.saveReportPresentationProfile(profile)
+    await this.audit('report-presentation-profile-updated', actorId, 'report-presentation-profile', { previousRevision: String(currentSnapshot.revision), revision: String(profile.revision) })
+    return structuredClone(profile)
+  }
+
+  async getAdminDashboard(sessionId: Id): Promise<{ profile: ReportPresentationProfile; csrfToken: string }> {
+    await this.requireOwnerSession(sessionId)
+    const session = await this.store.getSession(sessionId)
+    if (!session) throw new Error('Authentication required')
+    return { profile: presentationSnapshot(await this.store.getReportPresentationProfile()), csrfToken: session.csrfToken }
+  }
+
   // ------------------------------------------------------------------
   // Consent / authorization
   // ------------------------------------------------------------------
@@ -236,9 +345,13 @@ export class CreditAnalysisPlatform {
     const pending = (await this.store.listReportsForUser(userId)).reverse()
     const pendingReview = await (async () => {
       for (const candidate of pending) {
+        if (!candidate.reviewComplete) {
+          const review = await this.getValueReview(sessionId, candidate.id)
+          return { status: 'value-review-required' as const, reportId: candidate.id, required: review.required, decided: review.decided }
+        }
         const matches = await this.store.listMatchesByReport(candidate.id)
         const unresolved = matches.filter(match => match.state !== 'confirmed' && match.state !== 'rejected')
-        if (unresolved.length > 0) return { status: 'match-review-required' as const, reportId: candidate.id, matches: unresolved, tradelines: candidate.tradelines.map(line => ({ id: line.id, bureau: String(line.creditor.bureau), creditor: line.creditor.normalized ?? '', maskedAccount: line.maskedAccount.normalized ?? '', balanceCents: line.balance.normalized ?? null })) }
+        if (unresolved.length > 0) return { status: 'match-review-required' as const, reportId: candidate.id, matches: unresolved, tradelines: reviewedReportProjection(candidate).tradelines.map(line => ({ id: line.id, bureau: String(line.creditor.bureau), creditor: line.creditor.normalized ?? '', maskedAccount: line.maskedAccount.normalized ?? '', balanceCents: line.balance.normalized ?? null })) }
       }
       return null
     })()
@@ -369,10 +482,20 @@ export class CreditAnalysisPlatform {
     const tradelines = input.tradelines.map((line, index): Tradeline => {
       const confidence = line.confidence ?? 1
       const sliceValues = (field: string, values: string[]) => values.map((value, valueIndex) => makeValue(line.bureau, field, value, value, `${index}:${field}:${valueIndex}`, confidence))
-      return { id: randomUUID(), creditor: makeValue(line.bureau, 'creditor', line.creditor, line.creditor, `${index}:creditor`), maskedAccount: makeValue(line.bureau, 'account', maskAccount(line.account), maskAccount(line.account), `${index}:account`), accountType: makeValue(line.bureau, 'accountType', line.accountType, line.accountType, `${index}:type`), balance: { ...makeValue(line.bureau, 'balance', line.balance, `$${(line.balance / 100).toFixed(2)}`, `${index}:balance`, confidence), currency: 'USD' }, creditLimit: { ...makeValue(line.bureau, 'creditLimit', line.creditLimit ?? null, line.creditLimit === undefined ? '' : `$${(line.creditLimit / 100).toFixed(2)}`, `${index}:credit-limit`, confidence), currency: 'USD' }, pastDue: { ...makeValue(line.bureau, 'pastDue', line.pastDue ?? null, line.pastDue === undefined ? '' : `$${(line.pastDue / 100).toFixed(2)}`, `${index}:past-due`, confidence), currency: 'USD' }, status: makeValue(line.bureau, 'status', line.status, line.status, `${index}:status`), opened: { ...makeValue(line.bureau, 'opened', line.opened, line.opened, `${index}:opened`), datePrecision: line.opened.length === 7 ? 'month' : 'day' }, updated: { ...makeValue(line.bureau, 'updated', line.updated, line.updated, `${index}:updated`), datePrecision: line.updated.length === 7 ? 'month' : 'day' }, dateOfFirstDelinquency: { ...makeValue(line.bureau, 'dateOfFirstDelinquency', line.dateOfFirstDelinquency ?? null, line.dateOfFirstDelinquency ?? '', `${index}:date-of-first-delinquency`, confidence), datePrecision: line.dateOfFirstDelinquency?.length === 7 ? 'month' : 'day' }, paymentHistory: (line.paymentHistory ?? []).map((cell, cellIndex) => ({ ...makeValue(line.bureau, 'paymentHistory', cell.status, cell.status, `${index}:payment-history:${cellIndex}`, confidence), yearMonth: cell.yearMonth })), remarks: sliceValues('remark', line.remarks ?? []), specialCommentCodes: sliceValues('specialCommentCode', line.specialCommentCodes ?? []) }
+      return { id: randomUUID(), creditor: makeValue(line.bureau, 'creditor', line.creditor, line.creditor, `${index}:creditor`, confidence), maskedAccount: makeValue(line.bureau, 'account', maskAccount(line.account), maskAccount(line.account), `${index}:account`), accountType: makeValue(line.bureau, 'accountType', line.accountType, line.accountType, `${index}:type`), balance: { ...makeValue(line.bureau, 'balance', line.balance, `$${(line.balance / 100).toFixed(2)}`, `${index}:balance`, confidence), currency: 'USD' }, creditLimit: { ...makeValue(line.bureau, 'creditLimit', line.creditLimit ?? null, line.creditLimit === undefined ? '' : `$${(line.creditLimit / 100).toFixed(2)}`, `${index}:credit-limit`, confidence), currency: 'USD' }, pastDue: { ...makeValue(line.bureau, 'pastDue', line.pastDue ?? null, line.pastDue === undefined ? '' : `$${(line.pastDue / 100).toFixed(2)}`, `${index}:past-due`, confidence), currency: 'USD' }, status: makeValue(line.bureau, 'status', line.status, line.status, `${index}:status`), opened: { ...makeValue(line.bureau, 'opened', line.opened, line.opened, `${index}:opened`), datePrecision: line.opened.length === 7 ? 'month' : 'day' }, updated: { ...makeValue(line.bureau, 'updated', line.updated, line.updated, `${index}:updated`), datePrecision: line.updated.length === 7 ? 'month' : 'day' }, dateOfFirstDelinquency: { ...makeValue(line.bureau, 'dateOfFirstDelinquency', line.dateOfFirstDelinquency ?? null, line.dateOfFirstDelinquency ?? '', `${index}:date-of-first-delinquency`, confidence), datePrecision: line.dateOfFirstDelinquency?.length === 7 ? 'month' : 'day' }, paymentHistory: (line.paymentHistory ?? []).map((cell, cellIndex) => ({ ...makeValue(line.bureau, 'paymentHistory', cell.status, cell.status, `${index}:payment-history:${cellIndex}`, confidence), yearMonth: cell.yearMonth })), remarks: sliceValues('remark', line.remarks ?? []), specialCommentCodes: sliceValues('specialCommentCode', line.specialCommentCodes ?? []) }
     })
     const firstBureau = input.tradelines[0]?.bureau ?? 'equifax'; const mapText = (items: string[], field: string) => items.map((value, i) => makeValue(firstBureau, field, value, value, `${field}:${i}`))
-    const report: CanonicalReport = { id: randomUUID(), userId, uploadId, provider: input.provider, template: input.template, parserVersion, normalizedVersion: 1, reportDate: input.reportDate, identity: mapText(input.identity, 'identity'), addresses: mapText(input.addresses, 'address'), employers: mapText(input.employers, 'employer'), tradelines, collections: [], inquiries: mapText(input.inquiries, 'inquiry'), publicRecords: mapText(input.publicRecords, 'publicRecord'), scores: input.scores.map((score, i) => makeValue(firstBureau, 'score', score, String(score), `score:${i}`)), remarks: mapText(input.remarks, 'remark'), reviewComplete: false }
+    const inquiries = input.inquiries.map((value, index): Inquiry => ({
+      id: randomUUID(), bureau: firstBureau,
+      creditor: makeValue(firstBureau, 'inquiryCreditor', value, value, `inquiry:${index}:creditor`),
+      businessType: makeValue<string>(firstBureau, 'inquiryBusinessType', null, '', `inquiry:${index}:businessType`, 0),
+      date: makeValue<string>(firstBureau, 'inquiryDate', null, '', `inquiry:${index}:date`, 0),
+    }))
+    const scores = input.scores.map((score, i): CanonicalScore => ({
+      ...makeValue(firstBureau, 'score', score, String(score), `score:${i}`),
+      scale: makeValue<string>(firstBureau, 'scoreScale', null, '', `score:${i}:scale`, 0),
+    }))
+    const report: CanonicalReport = { id: randomUUID(), userId, uploadId, provider: input.provider, template: input.template, parserVersion, normalizedVersion: 1, reportDate: input.reportDate, identity: mapText(input.identity, 'identity'), addresses: mapText(input.addresses, 'address'), employers: mapText(input.employers, 'employer'), tradelines, collections: [], inquiries, publicRecords: mapText(input.publicRecords, 'publicRecord'), scores, remarks: mapText(input.remarks, 'remark'), reviewComplete: false }
     const parsedAt = now()
     await this.store.saveReport(report)
     this.recordTimestamp(report.id, { reportParsedAt: parsedAt, ...(upload.completedAt ? { uploadCompletedAt: upload.completedAt } : {}) })
@@ -380,11 +503,29 @@ export class CreditAnalysisPlatform {
     return structuredClone(report)
   }
 
+  async getValueReview(sessionId: Id, reportId: Id): Promise<ConsumerValueReview> {
+    const userId = await this.requireSession(sessionId)
+    const report = await this.store.getReport(reportId); if (!report || report.userId !== userId) throw new Error('Not found')
+    const values = reviewableValues(report).map((value): ConsumerReviewValue => ({
+      id: value.id, bureau: value.bureau, field: value.field, normalized: value.normalized,
+      originalDisplay: value.originalDisplay, state: value.state,
+      source: { kind: value.source.kind, locator: value.source.locator }, confidence: value.confidence,
+      ...(value.review ? { review: structuredClone(value.review) } : {}),
+    }))
+    const decided = values.filter(value => value.review !== undefined).length
+    return { reportId, required: values.length, decided, complete: report.reviewComplete, values }
+  }
+
   async reviewValue(sessionId: Id, reportId: Id, valueId: Id, input: { decision: import('./entities.js').ReviewDecision; reason: string; replacement?: string | number }): Promise<CanonicalReport> {
     const userId = await this.requireSession(sessionId)
     const report = await this.store.getReport(reportId); if (!report || report.userId !== userId) throw new Error('Not found')
-    const value = allValues(report).find(item => item.id === valueId); if (!value) throw new Error('Value not found')
-    value.review = { decision: input.decision, reason: input.reason, actorId: userId, at: now(), ...(input.replacement !== undefined ? { replacement: input.replacement } : {}) }
+    if (report.reviewComplete) throw new Error('Report review is already complete')
+    const value = reviewableValues(report).find(item => item.id === valueId); if (!value) throw new Error('Value is not reviewable')
+    if (!input.reason.trim()) throw new Error('A review reason is required')
+    if (input.decision === 'corrected') {
+      if (input.replacement === undefined || typeof input.replacement !== typeof value.normalized || (typeof input.replacement === 'string' && !input.replacement.trim())) throw new Error('Correction must match the extracted value type')
+    } else if (input.replacement !== undefined) throw new Error('Only corrected values may include a replacement')
+    value.review = { decision: input.decision, reason: input.reason.trim(), actorId: userId, at: now(), ...(input.replacement !== undefined ? { replacement: input.replacement } : {}) }
     report.normalizedVersion += 1
     await this.store.saveReport(report)
     await this.audit('report-value-reviewed', userId, valueId, { decision: input.decision })
@@ -393,8 +534,13 @@ export class CreditAnalysisPlatform {
   async completeReview(sessionId: Id, reportId: Id): Promise<void> {
     const userId = await this.requireSession(sessionId)
     const report = await this.store.getReport(reportId); if (!report || report.userId !== userId) throw new Error('Not found')
+    if (report.reviewComplete) throw new Error('Report review is already complete')
+    const missing = reviewableValues(report).filter(value => !value.review)
+    if (missing.length > 0) throw new Error(`Review requires decisions for ${missing.length} remaining value${missing.length === 1 ? '' : 's'}`)
     report.reviewComplete = true
+    report.reviewCompletedAt = now()
     await this.store.saveReport(report)
+    await this.audit('report-review-completed', userId, report.id, { reviewedValues: String(reviewableValues(report).length) })
   }
 
   /** REAL IdentityIQ PDF path: bytes → pdfjs (unpdf) → parser → canonical report. No child_process, no native binary — Workers-safe. */
@@ -477,8 +623,9 @@ export class CreditAnalysisPlatform {
     const userId = await this.requireSession(sessionId)
     const report = await this.store.getReport(reportId)
     if (!report || report.userId !== userId) throw new Error('Not found')
+    const reviewedTradelines = reviewedTradelinesForAnalysis(report)
     const grouped = new Map<string, Tradeline[]>()
-    for (const line of report.tradelines) {
+    for (const line of reviewedTradelines) {
       const creditor = line.creditor.normalized?.toLowerCase() ?? ''
       const account = line.maskedAccount.normalized ?? ''
       const key = `${creditor}:${account}`
@@ -527,7 +674,7 @@ export class CreditAnalysisPlatform {
     const uniqueTradelineIds = [...new Set(tradelineIds)]
     if (uniqueTradelineIds.length < 2) throw new Error('At least two tradelines are required')
     if (!uniqueTradelineIds.every(id => match.tradelineIds.includes(id))) throw new Error('Subset must come from the parent collision set')
-    const selected = report.tradelines.filter(line => uniqueTradelineIds.includes(line.id))
+    const selected = reviewedTradelinesForAnalysis(report).filter(line => uniqueTradelineIds.includes(line.id))
     const balanceAgreement = new Set(selected.map(line => line.balance.normalized)).size === 1
     const confidence = balanceAgreement ? 0.95 : 0.72
     const subgroup: MatchGroup = {
@@ -541,6 +688,10 @@ export class CreditAnalysisPlatform {
     }
     await this.store.saveMatch(subgroup)
     await this.audit('match-subgroup-confirmed', userId, subgroup.id, { parentMatchId: match.id, tradelineCount: String(uniqueTradelineIds.length) })
+    match.state = 'rejected'
+    match.history.push({ action: 'rejected', actorId: userId, at: now(), reason: 'Consumer resolved this collision set through an explicitly confirmed subgroup' })
+    await this.store.saveMatch(match)
+    await this.audit('match-collision-set-resolved', userId, match.id, { subgroupId: subgroup.id })
     return structuredClone(subgroup)
   }
 
@@ -549,11 +700,12 @@ export class CreditAnalysisPlatform {
     const report = await this.store.getReport(reportId); if (!report || report.userId !== userId) throw new Error('Not found')
     if (!report.reviewComplete) throw new Error('Report review is incomplete')
     const matches = await this.store.listMatchesByReport(reportId)
-    const unresolvedMatches = matches.filter(match => match.state === 'proposed')
+    const unresolvedMatches = matches.filter(match => match.state === 'proposed' || match.state === 'split')
     if (unresolvedMatches.length) throw new Error('Account matching confirmation is incomplete')
     const rules = this.publishedRulesets.get(rulesetVersion); if (!rules) throw new Error('Ruleset not found')
     if (rules.some(rule => rule.status === 'disabled' || rule.authorityIds.some(id => this.authorities.get(id)?.status === 'disabled') || rule.educationModuleIds.some(id => this.modules.get(id)?.status === 'disabled'))) throw new Error('Ruleset contains disabled content')
-    const core = evaluateAnalysis({ rules, tradelines: report.tradelines, confirmedMatches: matches.filter(match => match.state === 'confirmed').map(match => ({ tradelineIds: match.tradelineIds })), versions: { normalizedInput: report.normalizedVersion, ruleset: rulesetVersion, jurisdiction, parser: report.parserVersion, application: applicationVersion } })
+    const reviewedReport = reviewedReportProjection(report)
+    const core = evaluateAnalysis({ rules, tradelines: reviewedReport.tradelines, confirmedMatches: matches.filter(match => match.state === 'confirmed').map(match => ({ tradelineIds: match.tradelineIds })), versions: { normalizedInput: report.normalizedVersion, ruleset: rulesetVersion, jurisdiction, parser: report.parserVersion, application: applicationVersion } })
     const parsedAt = this.timelineBySubject.get(report.id)?.reportParsedAt
     const analysis: Analysis = { ...core, userId, reportId }
     await this.store.saveAnalysis(analysis)
@@ -572,6 +724,7 @@ export class CreditAnalysisPlatform {
     const userId = await this.requireSession(sessionId)
     const analysis = await this.store.getAnalysis(analysisId); if (!analysis || analysis.userId !== userId) throw new Error('Not found')
     const report = await this.store.getReport(analysis.reportId); if (!report) throw new Error('Not found')
+    const reviewedReport = reviewedReportProjection(report)
     const activeRules = this.publishedRulesets.get(analysis.versions.ruleset)
     if (!activeRules || activeRules.some(rule => rule.status === 'disabled' || rule.authorityIds.some(id => this.authorities.get(id)?.status === 'disabled') || rule.educationModuleIds.some(id => this.modules.get(id)?.status === 'disabled'))) throw new Error('Report content is disabled')
     const authorityById = new Map([...this.publishedAuthorities.values()].map(item => [item.id, item]))
@@ -599,7 +752,7 @@ export class CreditAnalysisPlatform {
     const parserFields: ParserFieldAvailability[] = fieldNames.map(field => ({
       field,
       capability: 'supported',
-      states: report.tradelines.reduce<ParserFieldAvailability['states']>((states, line) => {
+      states: reviewedReport.tradelines.reduce<ParserFieldAvailability['states']>((states, line) => {
         const value = line[field]
         states[value.state] += 1
         return states
@@ -608,17 +761,25 @@ export class CreditAnalysisPlatform {
     for (const field of ['paymentHistory', 'remarks', 'specialCommentCodes'] as const) parserFields.push({
       field,
       capability: 'supported',
-      states: report.tradelines.reduce<ParserFieldAvailability['states']>((states, line) => {
+      states: reviewedReport.tradelines.reduce<ParserFieldAvailability['states']>((states, line) => {
         const values = line[field]
         if (values.length === 0) states.unknown += 1
         else for (const value of values) states[value.state] += 1
         return states
       }, { known: 0, unknown: 0, blank: 0, 'not-applicable': 0, 'parser-failed': 0 }),
     })
+    const addParserField = (field: string, values: CanonicalValue<unknown>[]) => parserFields.push({
+      field,
+      capability: 'supported',
+      states: values.reduce<ParserFieldAvailability['states']>((states, value) => { states[value.state] += 1; return states }, { known: 0, unknown: 0, blank: 0, 'not-applicable': 0, 'parser-failed': 0 }),
+    })
+    addParserField('score', reviewedReport.scores.flatMap(score => [score, score.scale]))
+    addParserField('inquiry', reviewedReport.inquiries.flatMap(inquiry => [inquiry.creditor, inquiry.date]))
+    const recipient = displayRecipient(reviewedReport)
     const consumerReport: ConsumerReport = {
       id: randomUUID(), userId, analysisId,
       limitations: ['Educational information only', 'No legal verdict; no deletion promise or score prediction'],
-      overview: { tradelines: report.tradelines.length, collections: report.collections.length, inquiries: report.inquiries.length, openAccounts: report.tradelines.filter(line => line.status.normalized?.toLowerCase().includes('open')).length },
+      overview: { tradelines: reviewedReport.tradelines.length, collections: reviewedReport.collections.length, inquiries: reviewedReport.inquiries.length, openAccounts: reviewedReport.tradelines.filter(line => line.status.normalized?.toLowerCase().includes('open')).length },
       findings,
       actions: analysis.findings.map(finding => ({ id: randomUUID(), findingId: finding.id, status: 'unresolved', documents: [] })),
       content: {
@@ -628,7 +789,12 @@ export class CreditAnalysisPlatform {
         sectionPrimers,
         coverage,
         parserFields,
+        accountRows: sourceLinkedAccountRows(reviewedReport.tradelines),
+        ...(sourceLinkedScoreRows(reviewedReport.scores).length > 0 ? { scoreRows: sourceLinkedScoreRows(reviewedReport.scores) } : {}),
+        ...(sourceLinkedInquiryRows(reviewedReport.inquiries).length > 0 ? { inquiryRows: sourceLinkedInquiryRows(reviewedReport.inquiries) } : {}),
       },
+      presentation: presentationSnapshot(await this.store.getReportPresentationProfile()),
+      ...(recipient ? { recipient } : {}),
       generatedAt: now(),
     }
     await this.store.saveConsumerReport(consumerReport)
@@ -654,7 +820,7 @@ export class CreditAnalysisPlatform {
     const report = await this.store.getConsumerReport(consumerReportId); if (!report || report.userId !== userId) throw new Error('Not found')
     const existing = await this.store.findExportByReport(userId, consumerReportId)
     if (existing?.formatVersion === 'consumer-report-v2') return structuredClone(existing)
-    const content = JSON.stringify({ formatVersion: 'consumer-report-v2', generatedAt: now(), scope: 'Validated personal credit analysis', report: exportProjection(report) }, null, 2)
+    const content = JSON.stringify({ formatVersion: 'consumer-report-v2', generatedAt: now(), scope: 'Educational credit-report analysis with coverage limitations', report: exportProjection(report) }, null, 2)
     assertSafeConsumerOutput(content)
     const artifact: ExportArtifact = { id: existing?.id ?? randomUUID(), userId, reportId: consumerReportId, formatVersion: 'consumer-report-v2', content, createdAt: existing?.createdAt ?? now() }
     await this.store.saveExport(artifact)
@@ -916,6 +1082,21 @@ export class CreditAnalysisPlatform {
     return this.store.listAuditEventsForActor(userId)
   }
 
+  private async requireSessionWithCsrf(sessionId: Id, csrfToken: string): Promise<Id> {
+    const userId = await this.requireSession(sessionId)
+    const session = await this.store.getSession(sessionId)
+    if (!session || !csrfToken || session.csrfToken.length !== csrfToken.length || !timingSafeEqual(Buffer.from(session.csrfToken), Buffer.from(csrfToken))) throw new Error('Invalid request protection token')
+    return userId
+  }
+  private async requireOwnerSession(sessionId: Id): Promise<Id> {
+    const userId = await this.requireSession(sessionId)
+    const configuredOwner = this.ownerEmail?.trim().toLowerCase()
+    if (!configuredOwner) throw new Error('Owner dashboard is not configured')
+    const user = await this.store.getUserById(userId)
+    if (!user || user.email !== configuredOwner) throw new Error('Owner authorization required')
+    return userId
+  }
+
   /** Session hardening (D10): fails closed on revocation, absolute expiry, and idle timeout;
    *  refreshes lastUsedAt on every authenticated call (sliding idle window). */
   private async requireSession(sessionId: Id): Promise<Id> {
@@ -958,7 +1139,7 @@ function mapParserReportToCanonical(pr: ParserReport, userId: Id, uploadId: Id):
       const bureau = t.bureau as Bureau // filter above excluded 'unknown'; the PDF adapter only emits TU/EX/EQ
       return ({
         id: randomUUID(),
-        creditor: known(bureau, 'creditor', t.creditor),
+        creditor: toCanonical(t.creditor),
         maskedAccount: known(bureau, 'account', t.maskedAccount || '••••'),
         accountType: toCanonical(t.accountType),
         balance: toCanonical(t.balance, 'USD'),
@@ -973,7 +1154,45 @@ function mapParserReportToCanonical(pr: ParserReport, userId: Id, uploadId: Id):
         specialCommentCodes: t.specialCommentCodes.map(value => toCanonical(value)),
       })
     })
-  return { id: randomUUID(), userId, uploadId, provider: pr.provider, template: pr.template, parserVersion, normalizedVersion: 1, reportDate: pr.reportDate ?? '', identity: [], addresses: [], employers: [], tradelines, collections: [], inquiries: [], publicRecords: [], scores: [], remarks: [], reviewComplete: false }
+  const parserIdentity = pr.identity.map(value => toCanonical(value))
+  const inquiries = pr.inquiries.map((inquiry): Inquiry => ({ id: randomUUID(), bureau: inquiry.bureau as Bureau, creditor: toCanonical(inquiry.creditor), businessType: toCanonical(inquiry.businessType), date: toCanonical(inquiry.date) }))
+  const scores = pr.scores.map((score): CanonicalScore => ({ ...toCanonical(score.score), scale: toCanonical(score.scale) }))
+  return { id: randomUUID(), userId, uploadId, provider: pr.provider, template: pr.template, parserVersion, normalizedVersion: 1, reportDate: pr.reportDate ?? '', identity: parserIdentity, addresses: [], employers: [], tradelines, collections: [], inquiries, publicRecords: [], scores, remarks: [], reviewComplete: false }
 }
-function allValues(report: CanonicalReport): CanonicalValue<unknown>[] { const direct: CanonicalValue<unknown>[] = [...report.identity, ...report.addresses, ...report.employers, ...report.inquiries, ...report.publicRecords, ...report.scores, ...report.remarks]; for (const line of [...report.tradelines, ...report.collections]) direct.push(line.creditor, line.maskedAccount, line.accountType, line.balance, line.creditLimit, line.pastDue, line.status, line.opened, line.updated, line.dateOfFirstDelinquency, ...line.paymentHistory, ...line.remarks, ...line.specialCommentCodes); return direct }
+function displayRecipient(report: CanonicalReport): ReportRecipient | undefined {
+  const candidate = report.identity.find(value => value.field === 'consumer-display-name' && value.state === 'known' && value.normalized && value.confidence >= 0.95)
+  return candidate?.normalized ? { displayName: candidate.normalized, source: { kind: candidate.source.kind, locator: candidate.source.locator }, confidence: candidate.confidence } : undefined
+}
+
+function allValues(report: CanonicalReport): CanonicalValue<unknown>[] { const direct: CanonicalValue<unknown>[] = [...report.identity, ...report.addresses, ...report.employers, ...report.inquiries.flatMap(inquiry => [inquiry.creditor, inquiry.businessType, inquiry.date]), ...report.publicRecords, ...report.scores.flatMap(score => [score, score.scale]), ...report.remarks]; for (const line of [...report.tradelines, ...report.collections]) direct.push(line.creditor, line.maskedAccount, line.accountType, line.balance, line.creditLimit, line.pastDue, line.status, line.opened, line.updated, line.dateOfFirstDelinquency, ...line.paymentHistory, ...line.remarks, ...line.specialCommentCodes); return direct }
+
+/** Only values that could be shown or supply current rules require a consumer disposition. Unknown
+ * parser output stays unavailable rather than forcing the consumer to endorse an absent value. */
+function reviewableValues(report: CanonicalReport): CanonicalValue<string | number>[] {
+  return allValues(report).filter((value): value is CanonicalValue<string | number> => value.state === 'known' && value.normalized !== null && (typeof value.normalized === 'string' || typeof value.normalized === 'number'))
+}
+
+/** Reviews are an immutable provenance layer on the stored report. Consumers of normalized values
+ * receive a clone with corrections/unknown dispositions applied; original display/source/review data
+ * remain unchanged in storage for audit and evidence navigation. */
+function reviewedReportProjection(report: CanonicalReport): CanonicalReport {
+  const projected = structuredClone(report)
+  for (const value of allValues(projected)) {
+    const review = value.review
+    if (!review) continue
+    if (review.decision === 'unknown' || review.decision === 'not-shown') {
+      value.normalized = null
+      value.state = 'unknown'
+    } else if (review.decision === 'corrected' && review.replacement !== undefined) {
+      value.normalized = review.replacement
+      value.state = 'known'
+    }
+  }
+  return projected
+}
+
+function reviewedTradelinesForAnalysis(report: CanonicalReport): Tradeline[] {
+  return reviewedReportProjection(report).tradelines
+}
+
 function validateNarration(text: string, analysis: Analysis): boolean { if (!text.trim() || /guarantee|will be deleted|illegal|violation|\b\d{9}\b|ignore previous|system prompt/i.test(text)) return false; return analysis.findings.every(finding => text.includes(finding.title) && finding.limitations.every(limitation => text.includes(limitation))) }

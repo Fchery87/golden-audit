@@ -16,7 +16,7 @@ import { appendRuntimeEvent, resolveRuntimeDbPath, SqlitePlatformStore, FileBlob
 
 const port = Number(process.env.WEB_PORT ?? 3000)
 const runtimeDir = process.env.PILOT_PERSISTENCE_DIR ?? '.scratch/runtime/web'
-const platform = new CreditAnalysisPlatform(new SqlitePlatformStore(resolveRuntimeDbPath(runtimeDir)), new FileBlobStore(runtimeDir))
+const platform = new CreditAnalysisPlatform(new SqlitePlatformStore(resolveRuntimeDbPath(runtimeDir)), new FileBlobStore(runtimeDir), undefined, process.env.GOLDEN_AUDIT_OWNER_EMAIL)
 const approvalRecordPath = process.env.PILOT_APPROVAL_RECORD_PATH ?? 'docs/pilot-approval-records.json'
 const approvalRecords = JSON.parse(readFileSync(approvalRecordPath, 'utf8')) as PilotApprovalRecordFile
 const fixtureOnly = approvalRecords.scope === 'test-fixture-only' || /fixture/i.test(approvalRecords.status) || /not approvals?/i.test(approvalRecords._warning ?? '')
@@ -89,10 +89,12 @@ type ConsumerConsentBody = {
 type ConsumerAuthorizationBody = { version: string; accepted: boolean }
 type UploadInitBody = { workspaceId: string }
 type UploadCompleteBody = { uploadId: string; token: string; fileName: string; mediaType: string; contentBase64: string }
-type AnalysisKickoffBody = { jurisdiction?: string; autoConfirmSimpleMatches?: boolean }
+type AnalysisKickoffBody = { jurisdiction?: string }
+type AdminProfileBody = { expectedRevision: number; profile: Record<string, unknown> }
 type MatchDecisionBody = { action: 'confirmed' | 'rejected' | 'split' | 'merged'; reason: string }
 type MatchSubgroupBody = { tradelineIds: string[]; reason: string }
 type CompleteAnalysisBody = { jurisdiction?: string }
+type ReviewValueBody = { decision: 'confirmed' | 'corrected' | 'unknown' | 'not-shown'; reason: string; replacement?: string | number }
 type PasswordResetRequestBody = { email: string }
 type PasswordResetConfirmBody = { token: string; newPassword: string }
 type VerifyEmailBody = { token: string }
@@ -100,10 +102,12 @@ type VerifyEmailBody = { token: string }
 type TradelineSummary = { id: string; bureau: string; creditor: string; maskedAccount: string; balanceCents: number | null }
 
 type ConsumerFlowSummary = {
-  status: 'analysis-complete' | 'match-review-required'
+  status: 'analysis-complete' | 'value-review-required' | 'match-review-required'
   reportId: string
-  matches: MatchGroup[]
+  matches?: MatchGroup[]
   tradelines?: TradelineSummary[]
+  required?: number
+  decided?: number
   analysisId?: string
   consumerReportId?: string
   exportId?: string
@@ -186,25 +190,8 @@ function resolveRulesetForJurisdiction(jurisdiction: Jurisdiction): string {
 async function kickoffAnalysisFlow(sessionId: string, uploadId: string, body: AnalysisKickoffBody): Promise<ConsumerFlowSummary> {
   const jurisdiction = normalizeState(body.jurisdiction ?? launchScope?.provisionalSelectedState ?? 'US-CA')
   const report = await platform.parseReport(sessionId, uploadId)
-  await platform.completeReview(sessionId, report.id)
-  const matches = await platform.proposeMatches(sessionId, report.id)
-  const updatedMatches: MatchGroup[] = []
-  for (const match of matches) {
-    updatedMatches.push(body.autoConfirmSimpleMatches && match.tradelineIds.length <= 3 ? await platform.decideMatch(sessionId, match.id, 'confirmed', 'Auto-confirmed simple pilot match') : match)
-  }
-  const unresolved = updatedMatches.filter(match => match.state !== 'confirmed' && match.state !== 'rejected')
-  if (unresolved.length > 0) {
-    const tradelines: TradelineSummary[] = report.tradelines.map(line => ({
-      id: line.id,
-      bureau: String(line.creditor.bureau),
-      creditor: line.creditor.normalized ?? '',
-      maskedAccount: line.maskedAccount.normalized ?? '',
-      balanceCents: line.balance.normalized ?? null,
-    }))
-    return { status: 'match-review-required', reportId: report.id, matches: updatedMatches, tradelines }
-  }
-  const completed = await completeAnalysisForReport(sessionId, report.id, jurisdiction)
-  return { status: 'analysis-complete', reportId: report.id, matches: updatedMatches, ...completed }
+  const review = await platform.getValueReview(sessionId, report.id)
+  return { status: 'value-review-required', reportId: report.id, required: review.required, decided: review.decided }
 }
 
 async function completeAnalysisForReport(sessionId: string, reportId: string, jurisdiction: Jurisdiction): Promise<{ analysisId: string; consumerReportId: string; exportId: string }> {
@@ -265,6 +252,19 @@ async function handleAuthorization(request: IncomingMessage, response: ServerRes
 async function handleDisclosure(_request: IncomingMessage, response: ServerResponse): Promise<void> { respondJson(response, 200, platform.getDisclosure()) }
 async function handleDashboard(request: IncomingMessage, response: ServerResponse): Promise<void> { respondJson(response, 200, await platform.getConsumerDashboard(getSessionId(request))) }
 
+async function handleAdminDashboard(request: IncomingMessage, response: ServerResponse): Promise<void> {
+  respondJson(response, 200, await platform.getAdminDashboard(getSessionId(request)))
+}
+async function handleAdminProfile(request: IncomingMessage, response: ServerResponse): Promise<void> {
+  const sessionId = getSessionId(request)
+  const csrfToken = request.headers['x-golden-audit-csrf']
+  if (typeof csrfToken !== 'string') throw new Error('Invalid request protection token')
+  const body = await readJsonBody(request) as AdminProfileBody
+  if (!Number.isInteger(body.expectedRevision) || !body.profile || typeof body.profile !== 'object' || Array.isArray(body.profile)) throw new Error('Profile update is invalid')
+  const profile = await platform.updateReportPresentationProfile(sessionId, csrfToken, body.expectedRevision, body.profile)
+  respondJson(response, 200, profile)
+}
+
 async function handleUploadInit(request: IncomingMessage, response: ServerResponse): Promise<void> {
   const sessionId = getSessionId(request)
   const body = await readJsonBody(request) as UploadInitBody
@@ -295,6 +295,21 @@ async function handleKickoffAnalysis(request: IncomingMessage, response: ServerR
     recordRuntimeEvent(createRuntimeEvent({ kind: 'pilot-transition', at: new Date().toISOString(), transition: 'match-review-required', message: `manual review required for ${result.reportId}` }))
   }
   respondJson(response, result.status === 'analysis-complete' ? 201 : 202, result)
+}
+
+async function handleValueReview(request: IncomingMessage, response: ServerResponse, reportId: string): Promise<void> {
+  respondJson(response, 200, await platform.getValueReview(getSessionId(request), reportId))
+}
+async function handleValueDecision(request: IncomingMessage, response: ServerResponse, reportId: string, valueId: string): Promise<void> {
+  const body = await readJsonBody(request) as ReviewValueBody
+  respondJson(response, 200, await platform.reviewValue(getSessionId(request), reportId, valueId, body))
+}
+async function handleCompleteValueReview(request: IncomingMessage, response: ServerResponse, reportId: string): Promise<void> {
+  const sessionId = getSessionId(request)
+  await platform.completeReview(sessionId, reportId)
+  const matches = await platform.proposeMatches(sessionId, reportId)
+  const unresolved = matches.filter(match => match.state !== 'confirmed' && match.state !== 'rejected')
+  respondJson(response, unresolved.length > 0 ? 202 : 201, unresolved.length > 0 ? { status: 'match-review-required', reportId, matches } : { status: 'review-complete', reportId, matches })
 }
 
 async function handleMatchDecision(request: IncomingMessage, response: ServerResponse, matchId: string): Promise<void> {
@@ -394,7 +409,7 @@ const server = createServer(async (request, response) => {
       return
     }
 
-    if (request.method === 'GET' && (path === '/app' || path === '/debug')) {
+    if (request.method === 'GET' && (path === '/app' || path === '/debug' || path === '/admin')) {
       serveClientIndex(response)
       return
     }
@@ -404,6 +419,8 @@ const server = createServer(async (request, response) => {
       return
     }
 
+    if (request.method === 'GET' && path === '/admin/dashboard') return await handleAdminDashboard(request, response)
+    if (request.method === 'POST' && path === '/admin/profile') return await handleAdminProfile(request, response)
     if (request.method === 'GET' && path === '/consumer/disclosures') return await handleDisclosure(request, response)
     if (request.method === 'GET' && path === '/consumer/dashboard') return await handleDashboard(request, response)
     if (request.method === 'POST' && path === '/consumer/register') return await handleRegister(request, response)
@@ -418,6 +435,12 @@ const server = createServer(async (request, response) => {
     if (request.method === 'POST' && path === '/consumer/uploads/init') return await handleUploadInit(request, response)
     if (request.method === 'POST' && path === '/consumer/uploads/complete') return await handleUploadComplete(request, response)
     if (request.method === 'POST' && path === '/consumer/deletion') return await handleDeletion(request, response)
+
+    const valueReviewMatch = path.match(/^\/consumer\/reports\/([^/]+)\/value-review$/)
+    if (valueReviewMatch && request.method === 'GET') return await handleValueReview(request, response, valueReviewMatch[1] ?? '')
+    if (valueReviewMatch && request.method === 'POST') return await handleCompleteValueReview(request, response, valueReviewMatch[1] ?? '')
+    const valueDecisionMatch = request.method === 'POST' ? path.match(/^\/consumer\/reports\/([^/]+)\/values\/([^/]+)\/decision$/) : null
+    if (valueDecisionMatch) return await handleValueDecision(request, response, valueDecisionMatch[1] ?? '', valueDecisionMatch[2] ?? '')
 
     const kickoffMatch = request.method === 'POST' ? path.match(/^\/consumer\/uploads\/([^/]+)\/kickoff-analysis$/) : null
     if (kickoffMatch) return await handleKickoffAnalysis(request, response, kickoffMatch[1] ?? '')

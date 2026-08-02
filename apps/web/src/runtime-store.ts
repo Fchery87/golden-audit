@@ -5,7 +5,7 @@ import { DatabaseSync } from 'node:sqlite'
 import type {
   Id, User, Session, Workspace, AuthorizationRecord, Upload, CanonicalReport,
   MatchGroup, Analysis, ConsumerReport, ExportArtifact, DeletionJob, AuditEvent,
-  PlatformStore, BlobStore, Consent,
+  PlatformStore, BlobStore, Consent, ReportPresentationProfile,
 } from '../../../packages/platform/src/index.js'
 import type { RuntimeEvent } from '../../../packages/domain/src/runtime-events.js'
 
@@ -31,7 +31,7 @@ export class SqlitePlatformStore implements PlatformStore {
     this.db = new DatabaseSync(dbPath)
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, email TEXT NOT NULL UNIQUE, password_hash TEXT NOT NULL, password_salt TEXT NOT NULL, payload_json TEXT NOT NULL, created_at TEXT NOT NULL);
-      CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, revoked_at TEXT, created_at TEXT NOT NULL, expires_at TEXT NOT NULL, last_used_at TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, csrf_token TEXT NOT NULL DEFAULT '', revoked_at TEXT, created_at TEXT NOT NULL, expires_at TEXT NOT NULL, last_used_at TEXT NOT NULL);
       CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions(user_id);
       CREATE TABLE IF NOT EXISTS workspaces (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, created_at TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS authorizations (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, payload_json TEXT NOT NULL);
@@ -46,11 +46,13 @@ export class SqlitePlatformStore implements PlatformStore {
       CREATE TABLE IF NOT EXISTS exports (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, report_id TEXT NOT NULL, payload_json TEXT NOT NULL, created_at TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS deletion_jobs (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, payload_json TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS deletion_receipts (id TEXT PRIMARY KEY, completed_at TEXT NOT NULL, outcome TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS report_presentation_profile (id TEXT PRIMARY KEY CHECK (id = 'default'), revision INTEGER NOT NULL, payload_json TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS audit_events (id TEXT PRIMARY KEY, actor_id TEXT NOT NULL, subject_id TEXT NOT NULL, event_type TEXT NOT NULL, occurred_at TEXT NOT NULL, metadata_json TEXT NOT NULL);
       CREATE INDEX IF NOT EXISTS idx_audit_events_actor_id ON audit_events(actor_id);
       CREATE TABLE IF NOT EXISTS invites (code TEXT PRIMARY KEY, created_at TEXT NOT NULL, used_at TEXT, used_by_user_id TEXT);
       CREATE TABLE IF NOT EXISTS auth_tokens (token TEXT PRIMARY KEY, kind TEXT NOT NULL, user_id TEXT NOT NULL, expires_at TEXT NOT NULL, consumed_at TEXT);
     `)
+    try { this.db.exec("ALTER TABLE sessions ADD COLUMN csrf_token TEXT NOT NULL DEFAULT ''") } catch { /* Existing local databases may already have the additive column. */ }
   }
 
   close(): void { this.db.close() }
@@ -63,16 +65,19 @@ export class SqlitePlatformStore implements PlatformStore {
   async markEmailVerified(userId: Id, at: string) { const user = await this.getUserById(userId); if (!user) return; user.emailVerifiedAt = at; this.db.prepare('UPDATE users SET payload_json = ? WHERE id = ?').run(JSON.stringify(user), userId) }
 
   async getSession(id: Id) {
-    const row = this.db.prepare('SELECT id, user_id, revoked_at, created_at, expires_at, last_used_at FROM sessions WHERE id = ?').get(id) as { id: string; user_id: string; revoked_at: string | null; created_at: string; expires_at: string; last_used_at: string } | undefined
+    const row = this.db.prepare('SELECT id, user_id, csrf_token, revoked_at, created_at, expires_at, last_used_at FROM sessions WHERE id = ?').get(id) as { id: string; user_id: string; csrf_token: string; revoked_at: string | null; created_at: string; expires_at: string; last_used_at: string } | undefined
     if (!row) return undefined
-    return { id: row.id, userId: row.user_id, ...(row.revoked_at ? { revokedAt: row.revoked_at } : {}), createdAt: row.created_at, expiresAt: row.expires_at, lastUsedAt: row.last_used_at } as Session
+    return { id: row.id, userId: row.user_id, csrfToken: row.csrf_token, ...(row.revoked_at ? { revokedAt: row.revoked_at } : {}), createdAt: row.created_at, expiresAt: row.expires_at, lastUsedAt: row.last_used_at } as Session
   }
-  async createSession(session: Session) { this.db.prepare('INSERT INTO sessions (id, user_id, revoked_at, created_at, expires_at, last_used_at) VALUES (?, ?, ?, ?, ?, ?)').run(session.id, session.userId, session.revokedAt ?? null, session.createdAt, session.expiresAt, session.lastUsedAt) }
+  async createSession(session: Session) { this.db.prepare('INSERT INTO sessions (id, user_id, csrf_token, revoked_at, created_at, expires_at, last_used_at) VALUES (?, ?, ?, ?, ?, ?, ?)').run(session.id, session.userId, session.csrfToken, session.revokedAt ?? null, session.createdAt, session.expiresAt, session.lastUsedAt) }
   async updateSession(session: Session) { this.db.prepare('UPDATE sessions SET revoked_at = ?, last_used_at = ? WHERE id = ?').run(session.revokedAt ?? null, session.lastUsedAt, session.id) }
   async listActiveSessionsForUser(userId: Id) {
-    const rows = this.db.prepare('SELECT id, user_id, created_at, expires_at, last_used_at FROM sessions WHERE user_id = ? AND revoked_at IS NULL').all(userId) as Array<{ id: string; user_id: string; created_at: string; expires_at: string; last_used_at: string }>
-    return rows.map(row => ({ id: row.id, userId: row.user_id, createdAt: row.created_at, expiresAt: row.expires_at, lastUsedAt: row.last_used_at }) as Session)
+    const rows = this.db.prepare('SELECT id, user_id, csrf_token, created_at, expires_at, last_used_at FROM sessions WHERE user_id = ? AND revoked_at IS NULL').all(userId) as Array<{ id: string; user_id: string; csrf_token: string; created_at: string; expires_at: string; last_used_at: string }>
+    return rows.map(row => ({ id: row.id, userId: row.user_id, csrfToken: row.csrf_token, createdAt: row.created_at, expiresAt: row.expires_at, lastUsedAt: row.last_used_at }) as Session)
   }
+
+  async getReportPresentationProfile() { const row = this.db.prepare("SELECT payload_json FROM report_presentation_profile WHERE id = 'default'").get() as { payload_json: string } | undefined; return row ? JSON.parse(row.payload_json) as ReportPresentationProfile : undefined }
+  async saveReportPresentationProfile(profile: ReportPresentationProfile) { this.db.prepare("INSERT INTO report_presentation_profile (id, revision, payload_json) VALUES ('default', ?, ?) ON CONFLICT(id) DO UPDATE SET revision = excluded.revision, payload_json = excluded.payload_json").run(profile.revision, JSON.stringify(profile)) }
 
   async getWorkspace(id: Id) { const row = this.db.prepare('SELECT id, user_id, created_at FROM workspaces WHERE id = ?').get(id) as { id: string; user_id: string; created_at: string } | undefined; return row ? { id: row.id, userId: row.user_id, createdAt: row.created_at } as Workspace : undefined }
   async listWorkspacesForUser(userId: Id) { const rows = this.db.prepare('SELECT id, user_id, created_at FROM workspaces WHERE user_id = ? ORDER BY created_at DESC').all(userId) as Array<{ id: string; user_id: string; created_at: string }>; return rows.map(row => ({ id: row.id, userId: row.user_id, createdAt: row.created_at }) as Workspace) }

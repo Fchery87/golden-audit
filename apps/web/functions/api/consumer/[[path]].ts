@@ -1,6 +1,6 @@
 import type { PagesFunction } from '@cloudflare/workers-types'
 import { type Jurisdiction, type MatchGroup } from '../../../../../packages/platform/src/index.js'
-import { loadPilotPlatform, loadConsumerEmailSender, type PilotPagesEnv } from '../_platform.js'
+import { loadPilotPlatform, loadPilotRuntime, loadConsumerEmailSender, type PilotPagesEnv } from '../_platform.js'
 import { buildPilotAvailabilityPayload, buildPilotOnboardingPayload } from '../../../src/pilot-state.js'
 
 type JsonRecord = Record<string, unknown>
@@ -19,10 +19,12 @@ type ConsumerConsentBody = {
 type ConsumerAuthorizationBody = { version: string; accepted: boolean }
 type UploadInitBody = { workspaceId: string }
 type UploadCompleteBody = { uploadId: string; token: string; fileName: string; mediaType: string; contentBase64: string }
-type AnalysisKickoffBody = { jurisdiction?: string; autoConfirmSimpleMatches?: boolean }
+type AnalysisKickoffBody = { jurisdiction?: string }
+type AdminProfileBody = { expectedRevision: number; profile: Record<string, unknown> }
 type MatchDecisionBody = { action: 'confirmed' | 'rejected' | 'split' | 'merged'; reason: string }
 type MatchSubgroupBody = { tradelineIds: string[]; reason: string }
 type CompleteAnalysisBody = { jurisdiction?: string }
+type ReviewValueBody = { decision: 'confirmed' | 'corrected' | 'unknown' | 'not-shown'; reason: string; replacement?: string | number }
 type PasswordResetRequestBody = { email: string }
 type PasswordResetConfirmBody = { token: string; newPassword: string }
 type VerifyEmailBody = { token: string }
@@ -142,6 +144,18 @@ async function handleAuthorization(env: PilotPagesEnv, request: any): Promise<Re
 async function handleDisclosure(env: PilotPagesEnv): Promise<Response> { return respondJson(loadPilotPlatform(env).getDisclosure()) }
 async function handleDashboard(env: PilotPagesEnv, request: any): Promise<Response> { return respondJson(await loadPilotPlatform(env).getConsumerDashboard(getSessionId(request))) }
 
+async function handleAdminDashboard(env: PilotPagesEnv, request: any): Promise<Response> {
+  return respondJson(await loadPilotPlatform(env).getAdminDashboard(getSessionId(request)))
+}
+async function handleAdminProfile(env: PilotPagesEnv, request: any): Promise<Response> {
+  const csrfToken = request.headers.get('x-golden-audit-csrf')
+  if (!csrfToken) throw new Error('Invalid request protection token')
+  const body = await readJsonBody(request) as AdminProfileBody
+  if (!Number.isInteger(body.expectedRevision) || !body.profile || typeof body.profile !== 'object' || Array.isArray(body.profile)) throw new Error('Profile update is invalid')
+  const sessionId = getSessionId(request)
+  return respondJson(await loadPilotPlatform(env).updateReportPresentationProfile(sessionId, csrfToken, body.expectedRevision, body.profile))
+}
+
 async function handleUploadInit(env: PilotPagesEnv, request: any): Promise<Response> {
   const sessionId = getSessionId(request)
   const body = await readJsonBody(request) as UploadInitBody
@@ -175,20 +189,23 @@ async function handleKickoffAnalysis(env: PilotPagesEnv, request: any, uploadId:
   const platform = loadPilotPlatform(env)
   const jurisdiction = normalizeState(body.jurisdiction ?? 'US-CA')
   const report = await platform.parseReport(sessionId, uploadId)
-  await platform.completeReview(sessionId, report.id)
-  const matches = await platform.proposeMatches(sessionId, report.id)
-  const updatedMatches: MatchGroup[] = []
-  for (const match of matches) {
-    updatedMatches.push(body.autoConfirmSimpleMatches && match.tradelineIds.length <= 3 ? await platform.decideMatch(sessionId, match.id, 'confirmed', 'Auto-confirmed simple pilot match') : match)
-  }
-  const unresolved = updatedMatches.filter(match => match.state !== 'confirmed' && match.state !== 'rejected')
-  if (unresolved.length > 0) {
-    return respondJson({ status: 'match-review-required', reportId: report.id, matches: updatedMatches, tradelines: report.tradelines.map(line => ({ id: line.id, bureau: String(line.creditor.bureau), creditor: line.creditor.normalized ?? '', maskedAccount: line.maskedAccount.normalized ?? '', balanceCents: line.balance.normalized ?? null })) }, 202)
-  }
-  const analysis = await platform.runAnalysis(sessionId, report.id, resolveRulesetForJurisdiction(platform, jurisdiction), jurisdiction)
-  const consumerReport = await platform.createConsumerReport(sessionId, analysis.id)
-  const exportArtifact = await platform.createExport(sessionId, consumerReport.id)
-  return respondJson({ status: 'analysis-complete', reportId: report.id, matches: updatedMatches, analysisId: analysis.id, consumerReportId: consumerReport.id, exportId: exportArtifact.id }, 201)
+  return respondJson({ status: 'value-review-required', reportId: report.id, required: (await platform.getValueReview(sessionId, report.id)).required, decided: 0 }, 202)
+}
+
+async function handleValueReview(env: PilotPagesEnv, request: any, reportId: string): Promise<Response> {
+  return respondJson(await loadPilotPlatform(env).getValueReview(getSessionId(request), reportId))
+}
+async function handleValueDecision(env: PilotPagesEnv, request: any, reportId: string, valueId: string): Promise<Response> {
+  const body = await readJsonBody(request) as ReviewValueBody
+  return respondJson(await loadPilotPlatform(env).reviewValue(getSessionId(request), reportId, valueId, body))
+}
+async function handleCompleteValueReview(env: PilotPagesEnv, request: any, reportId: string): Promise<Response> {
+  const platform = loadPilotPlatform(env)
+  await platform.completeReview(getSessionId(request), reportId)
+  const matches = await platform.proposeMatches(getSessionId(request), reportId)
+  const unresolved = matches.filter(match => match.state !== 'confirmed' && match.state !== 'rejected')
+  if (unresolved.length > 0) return respondJson({ status: 'match-review-required', reportId, matches }, 202)
+  return respondJson({ status: 'review-complete', reportId, matches }, 201)
 }
 
 async function handleMatchDecision(env: PilotPagesEnv, request: any, matchId: string): Promise<Response> {
@@ -273,6 +290,12 @@ async function handleVerifyEmail(env: PilotPagesEnv, request: any): Promise<Resp
   return respondJson({ status: 'email-verified' }, 200)
 }
 
+function assertSameOriginMutation(request: any): void {
+  if (request.method !== 'POST') return
+  const origin = request.headers.get('origin')
+  if (!origin || origin !== new URL(request.url).origin) throw new Error('Invalid request origin')
+}
+
 async function route(context: { request: any; env: PilotPagesEnv }): Promise<Response> {
   const { request, env } = context
   const path = getPath(request)
@@ -282,26 +305,31 @@ async function route(context: { request: any; env: PilotPagesEnv }): Promise<Res
   }
 
   if (request.method === 'GET' && path === '/api/pilot-availability') {
+    const runtime = loadPilotRuntime(env)
     const state = new URL(request.url).searchParams.get('state')?.trim().toUpperCase()
     const normalizedState = state ? normalizeState(state) : undefined
-    return respondJson(buildPilotAvailabilityPayload({
-      mode: 'one-state-free-pilot',
-      approvedStates: ['US-CA'] as Jurisdiction[],
-      provisionalSelectedState: 'US-CA' as Jurisdiction,
-      stateSelectionEvidenceReference: 'docs/one-state-launch-selection-memo.md',
-      availabilityClaim: 'Pilot currently limited to approved pilot states only.',
-      pricingMode: 'free-pilot-only',
-      nationwideStatus: 'state-by-state-review',
-      notes: 'Cloudflare Pages pilot seed scope for California-only invite review.',
-      configuredAt: new Date().toISOString(),
-    }, true, normalizedState), 200)
+    if (!runtime.scope) return respondJson({ status: 'launch-scope-missing', eligible: false, message: runtime.reason ?? 'Pilot launch scope is not configured.' }, 200)
+    return respondJson(buildPilotAvailabilityPayload(runtime.scope, runtime.fixtureOnly, normalizedState), 200)
   }
 
   if (request.method === 'GET' && path === '/api/onboarding') {
-    const platform = loadPilotPlatform(env)
-    return respondJson({ service: 'pages-functions', onboarding: buildPilotOnboardingPayload(platform.getLaunchScope(), 'Pilot currently limited to approved pilot states only.', true) })
+    const runtime = loadPilotRuntime(env)
+    return respondJson({
+      service: 'pages-functions',
+      onboarding: buildPilotOnboardingPayload(runtime.scope, runtime.scope?.availabilityClaim ?? 'Pilot is unavailable for consumer processing.', runtime.fixtureOnly),
+      ready: runtime.ready,
+      ...(runtime.reason ? { reason: runtime.reason } : {}),
+    })
   }
 
+  // Diagnostics above remain available in fixture/unready deployments. All consumer or admin
+  // state and consumer-data routes fail closed until the same runtime configuration passes the
+  // platform approval gate.
+  if (!loadPilotRuntime(env).ready) return respondJson({ error: 'Pilot is unavailable for consumer processing' }, 503)
+  assertSameOriginMutation(request)
+
+  if (request.method === 'GET' && path === '/api/admin/dashboard') return handleAdminDashboard(env, request)
+  if (request.method === 'POST' && path === '/api/admin/profile') return handleAdminProfile(env, request)
   if (request.method === 'GET' && path === '/api/consumer/disclosures') return handleDisclosure(env)
   if (request.method === 'GET' && path === '/api/consumer/dashboard') return handleDashboard(env, request)
   if (request.method === 'POST' && path === '/api/consumer/register') return handleRegister(env, request)
@@ -317,7 +345,12 @@ async function route(context: { request: any; env: PilotPagesEnv }): Promise<Res
   if (request.method === 'POST' && path === '/api/consumer/uploads/complete') return handleUploadComplete(env, request)
   if (request.method === 'POST' && path === '/api/consumer/deletion') return handleDeletion(env, request)
 
-  let match = matchPrefix(path, /^\/api\/consumer\/uploads\/([^/]+)\/kickoff-analysis$/)
+  let match = matchPrefix(path, /^\/api\/consumer\/reports\/([^/]+)\/value-review$/)
+  if (request.method === 'GET' && match) return handleValueReview(env, request, match[1] ?? '')
+  if (request.method === 'POST' && match) return handleCompleteValueReview(env, request, match[1] ?? '')
+  match = matchPrefix(path, /^\/api\/consumer\/reports\/([^/]+)\/values\/([^/]+)\/decision$/)
+  if (request.method === 'POST' && match) return handleValueDecision(env, request, match[1] ?? '', match[2] ?? '')
+  match = matchPrefix(path, /^\/api\/consumer\/uploads\/([^/]+)\/kickoff-analysis$/)
   if (request.method === 'POST' && match) return handleKickoffAnalysis(env, request, match[1] ?? '')
   match = matchPrefix(path, /^\/api\/consumer\/matches\/([^/]+)\/decision$/)
   if (request.method === 'POST' && match) return handleMatchDecision(env, request, match[1] ?? '')

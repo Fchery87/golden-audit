@@ -5,6 +5,13 @@ import { CreditAnalysisPlatform } from '../packages/platform/src/index.js'
 
 const consent = { version: '2026-01', adultUSConsumer: true, authorizedReportUse: true, educationalLimitations: true, sensitiveDataHandling: true, residence: 'US-CA', analysisJurisdiction: 'US-CA' } as const
 
+async function confirmAllReviewValues(platform: CreditAnalysisPlatform, sessionId: string, reportId: string): Promise<void> {
+  const review = await platform.getValueReview(sessionId, reportId)
+  for (const value of review.values) await platform.reviewValue(sessionId, reportId, value.id, { decision: 'confirmed', reason: 'Synthetic or measurement fixture confirmation.' })
+  await platform.completeReview(sessionId, reportId)
+}
+
+
 test('redaction: strips SSNs (dashed and bare 9-digit) and credential markers, with a count', () => {
   const raw = 'SSN 123-45-6789 alt 987654321 password: hunter2 cvv=123 keep 1234'
   const { redacted, redactions } = redactReportText(raw)
@@ -54,7 +61,7 @@ test('trust boundary: an SSN injected into the upload cannot reach the parsed re
   assert.ok((upload.redactionCount ?? 0) > 0, 'redaction must run at the ingestion boundary')
 
   const report = await platform.parseReport(sessionId, upload.id)
-  await platform.completeReview(sessionId, report.id)
+  await confirmAllReviewValues(platform, sessionId, report.id)
   const match = (await platform.proposeMatches(sessionId, report.id))[0]!
   await platform.decideMatch(sessionId, match.id, 'confirmed', 'same account')
 

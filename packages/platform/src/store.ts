@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import type {
   Id, User, Session, Workspace, AuthorizationRecord, Upload, CanonicalReport,
-  MatchGroup, Analysis, ConsumerReport, ExportArtifact, DeletionJob, AuditEvent, Consent,
+  MatchGroup, Analysis, ConsumerReport, ExportArtifact, DeletionJob, AuditEvent, Consent, ReportPresentationProfile,
 } from './entities.js'
 
 /**
@@ -34,6 +34,9 @@ export interface PlatformStore {
   createSession(session: Session): Promise<void>
   updateSession(session: Session): Promise<void>
   listActiveSessionsForUser(userId: Id): Promise<Session[]>
+
+  getReportPresentationProfile(): Promise<ReportPresentationProfile | undefined>
+  saveReportPresentationProfile(profile: ReportPresentationProfile): Promise<void>
 
   getWorkspace(id: Id): Promise<Workspace | undefined>
   listWorkspacesForUser(userId: Id): Promise<Workspace[]>
@@ -113,6 +116,7 @@ export class InMemoryStore implements PlatformStore {
   private users = new Map<Id, User>()
   private usersByEmail = new Map<string, Id>()
   private sessions = new Map<Id, Session>()
+  private reportPresentationProfile: ReportPresentationProfile | undefined
   private workspaces = new Map<Id, Workspace>()
   private authorizations = new Map<Id, AuthorizationRecord>()
   private authorizationByUser = new Map<Id, Id>()
@@ -140,6 +144,9 @@ export class InMemoryStore implements PlatformStore {
   async createSession(session: Session) { this.sessions.set(session.id, structuredClone(session)) }
   async updateSession(session: Session) { this.sessions.set(session.id, structuredClone(session)) }
   async listActiveSessionsForUser(userId: Id) { return [...this.sessions.values()].filter(s => s.userId === userId && !s.revokedAt).map(s => structuredClone(s)) }
+
+  async getReportPresentationProfile() { return this.reportPresentationProfile ? structuredClone(this.reportPresentationProfile) : undefined }
+  async saveReportPresentationProfile(profile: ReportPresentationProfile) { this.reportPresentationProfile = structuredClone(profile) }
 
   async getWorkspace(id: Id) { const w = this.workspaces.get(id); return w ? structuredClone(w) : undefined }
   async listWorkspacesForUser(userId: Id) { return [...this.workspaces.values()].filter(item => item.userId === userId).map(item => structuredClone(item)) }

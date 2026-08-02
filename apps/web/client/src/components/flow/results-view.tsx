@@ -10,6 +10,7 @@ import {
 } from '@/lib/api'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { AccountAnalysisTable, FindingEvidenceTable } from '@/components/consumer/account-analysis-tables'
 
 export function ResultsView({ kickoff, onCompleted }: { kickoff: KickoffResult; onCompleted?: (result: CompleteAnalysisResult) => void }) {
   if (kickoff.status === 'match-review-required') {
@@ -105,9 +106,7 @@ function Reading({ consumerReportId, exportId }: { consumerReportId: string; exp
                   <span className="font-mono text-xs text-faint">{f.classification.replaceAll('-', ' ')} · confidence {Math.round(f.confidence * 100)}%</span>
                 </div>
                 <h4 className="mt-3 font-serif text-2xl leading-snug">{f.title}</h4>
-                <dl className="mt-5 grid gap-3 text-sm sm:grid-cols-2">
-                  {f.evidence.map((item, index) => <div key={`${item.field}-${index}`}><dt className="font-mono text-xs uppercase text-faint">{item.field}</dt><dd className="mt-1">{String(item.value ?? 'Not shown')} {item.source.page ? <span className="text-muted-foreground">(page {item.source.page})</span> : null}</dd></div>)}
-                </dl>
+                <FindingEvidenceTable evidence={f.evidence} />
                 <ReportList label="Other explanations to consider" items={f.alternativeExplanations} />
                 <p className="mt-5 text-sm leading-relaxed"><span className="font-medium">Suggested next step: </span>{f.suggestedAction}</p>
                 <ReportList label="Documents that may help you verify" items={f.verificationDocuments} />
@@ -122,6 +121,9 @@ function Reading({ consumerReportId, exportId }: { consumerReportId: string; exp
               </li>
             ))}
           </ul>}
+
+          <ScoreAndInquirySummary scores={report.content.scoreRows} inquiries={report.content.inquiryRows} />
+          <AccountAnalysisTable rows={report.content.accountRows} />
 
           <section className="mt-10" aria-labelledby="coverage-heading">
             <p className="eyebrow" id="coverage-heading">Checks and coverage</p>
@@ -159,13 +161,21 @@ function Reading({ consumerReportId, exportId }: { consumerReportId: string; exp
   )
 }
 
+function ScoreAndInquirySummary({ scores, inquiries }: { scores: NonNullable<ConsumerReport['content']>['scoreRows']; inquiries: NonNullable<ConsumerReport['content']>['inquiryRows'] }) {
+  if ((!scores || scores.length === 0) && (!inquiries || inquiries.length === 0)) return null
+  return <section className="mt-10 space-y-8" aria-label="Source-linked reported score and inquiry data">
+    {scores && scores.length > 0 && <section><p className="eyebrow">Reported credit scores</p><p className="mt-2 text-sm text-muted-foreground">These values are shown exactly as reported in the uploaded document. This reading does not interpret, compare, predict, or recommend based on them.</p><div className="mt-3 overflow-x-auto border border-rule"><table className="w-full min-w-[42rem] text-left text-sm"><thead className="border-b border-rule text-xs uppercase text-faint"><tr><th className="p-3">Bureau</th><th className="p-3">Reported score</th><th className="p-3">Reported scale</th><th className="p-3">Source references</th></tr></thead><tbody>{scores.map(score => <tr className="border-b border-rule last:border-0" key={score.bureau}><td className="p-3 capitalize">{score.bureau}</td><td className="p-3">{score.score}</td><td className="p-3">{score.scoreScale}</td><td className="p-3 font-mono text-xs text-muted-foreground">{score.source.locator} · {score.scaleSource.locator}</td></tr>)}</tbody></table></div></section>}
+    {inquiries && inquiries.length > 0 && <section><p className="eyebrow">Report-provided inquiries</p><p className="mt-2 text-sm text-muted-foreground">These entries are reproduced from the uploaded document. This reading does not classify them or assess an effect.</p><div className="mt-3 overflow-x-auto border border-rule"><table className="w-full min-w-[42rem] text-left text-sm"><thead className="border-b border-rule text-xs uppercase text-faint"><tr><th className="p-3">Creditor</th><th className="p-3">Business type</th><th className="p-3">Date</th><th className="p-3">Bureau</th><th className="p-3">Source reference</th></tr></thead><tbody>{inquiries.map(inquiry => <tr className="border-b border-rule last:border-0" key={inquiry.id}><td className="p-3">{inquiry.creditor}</td><td className="p-3 text-muted-foreground">{inquiry.businessType ?? 'Not shown in source'}</td><td className="p-3">{inquiry.date}</td><td className="p-3 capitalize">{inquiry.bureau}</td><td className="p-3 font-mono text-xs text-muted-foreground">{inquiry.source.locator}</td></tr>)}</tbody></table></div></section>}
+  </section>
+}
+
 function ReportList({ label, items }: { label: string; items: string[] }) {
   if (items.length === 0) return null
   return <section className="mt-5"><p className="eyebrow">{label}</p><ul className="mt-2 space-y-1 text-sm text-muted-foreground">{items.map((item) => <li key={item}>— {item}</li>)}</ul></section>
 }
 
 export function CollisionReview({ kickoff, onCompleted }: { kickoff: KickoffResult; onCompleted?: (result: CompleteAnalysisResult) => void }) {
-  const groups = kickoff.matches.filter((m) => m.state === 'split')
+  const groups = (kickoff.matches ?? []).filter((m) => m.state === 'split' || m.state === 'proposed')
   const tlById = React.useMemo(() => {
     const map = new Map<string, TradelineSummary>()
     for (const t of kickoff.tradelines ?? []) map.set(t.id, t)
@@ -195,7 +205,10 @@ export function CollisionReview({ kickoff, onCompleted }: { kickoff: KickoffResu
     setBusy(groupId)
     setError(null)
     try {
-      await api.confirmSubgroup(groupId, ids, 'Consumer confirmed subgroup')
+      const group = groups.find(item => item.id === groupId)
+      if (!group) throw new Error('Match group is unavailable')
+      if (group.state === 'proposed') await api.decideMatch(groupId, 'confirmed', 'Consumer confirmed this account match')
+      else await api.confirmSubgroup(groupId, ids, 'Consumer confirmed subgroup')
       setConfirmed((prev) => ({ ...prev, [groupId]: true }))
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Unexpected error')
@@ -227,8 +240,7 @@ export function CollisionReview({ kickoff, onCompleted }: { kickoff: KickoffResu
       <Header index="04" label="Review required" />
 
       <p className="mt-6 max-w-xl text-base leading-relaxed">
-        These account groups are large enough (more than three tradelines) that we won’t guess.
-        Select the entries that are the same account to confirm a subgroup, then complete the reading.
+        These account groups need your confirmation before analysis continues. For collision sets with more than three tradelines, select the entries that are the same account. For other proposed matches, confirm only if the account details look right.
       </p>
 
       {error && (
@@ -239,6 +251,7 @@ export function CollisionReview({ kickoff, onCompleted }: { kickoff: KickoffResu
 
       <div className="mt-8 space-y-8">
         {groups.map((group, gi) => {
+          const requiresSubgroup = group.state === 'split'
           const sel = selections[group.id] ?? new Set<string>()
           const isConfirmed = !!confirmed[group.id]
           return (
@@ -256,15 +269,17 @@ export function CollisionReview({ kickoff, onCompleted }: { kickoff: KickoffResu
                 ) : (
                   <Button
                     size="sm"
-                    disabled={!!busy || sel.size < 2}
+                    disabled={!!busy || (requiresSubgroup && sel.size < 2)}
                     onClick={() => confirmGroup(group.id)}
                   >
                     {busy === group.id ? (
                       <>
                         <Loader2 className="h-3 w-3 animate-spin" /> Confirming
                       </>
-                    ) : (
+                    ) : requiresSubgroup ? (
                       <>Confirm subgroup ({sel.size})</>
+                    ) : (
+                      <>Confirm account match</>
                     )}
                   </Button>
                 )}
@@ -278,7 +293,7 @@ export function CollisionReview({ kickoff, onCompleted }: { kickoff: KickoffResu
                       <input
                         type="checkbox"
                         checked={checked}
-                        disabled={isConfirmed || !!busy}
+                        disabled={!requiresSubgroup || isConfirmed || !!busy}
                         onChange={() => toggle(group.id, tlId)}
                         className="h-4 w-4 accent-[var(--primary)]"
                       />
@@ -309,7 +324,7 @@ export function CollisionReview({ kickoff, onCompleted }: { kickoff: KickoffResu
         </Button>
         {!allConfirmed && (
           <p className="mt-3 font-mono text-xs text-muted-foreground">
-            Confirm a subgroup for each collision set to continue.
+            Confirm each proposed account match or select and confirm a subgroup for each collision set to continue.
           </p>
         )}
       </div>

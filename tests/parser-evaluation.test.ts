@@ -14,7 +14,7 @@ test('parser evaluation: precision/recall counts matched, missing, and unexpecte
 
   const summary = evaluateParserFields([
     { label: 'reportDate', expected: '2026-07-01', actual: parsed.report.reportDate },
-    { label: 'first creditor', expected: 'Example Bank', actual: parsed.report.tradelines[0]?.creditor },
+    { label: 'first creditor', expected: 'Example Bank', actual: parsed.report.tradelines[0]?.creditor.normalized },
     { label: 'first balance', expected: 12500, actual: parsed.report.tradelines[0]?.balance.normalized },
     { label: 'second balance', expected: 15000, actual: parsed.report.tradelines[1]?.balance.normalized },
     { label: 'missing middle name', expected: 'A Consumer', actual: undefined },

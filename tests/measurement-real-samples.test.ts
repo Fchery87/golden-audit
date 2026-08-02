@@ -41,6 +41,13 @@ function binOf(magCents: number): string {
   return '>$1k'                              // likely material
 }
 
+async function confirmAllReviewValues(platform: CreditAnalysisPlatform, sessionId: string, reportId: string): Promise<void> {
+  const review = await platform.getValueReview(sessionId, reportId)
+  for (const value of review.values) await platform.reviewValue(sessionId, reportId, value.id, { decision: 'confirmed', reason: 'Synthetic or measurement fixture confirmation.' })
+  await platform.completeReview(sessionId, reportId)
+}
+
+
 test('measurement: real-sample finding magnitude distribution (structure-only)', { skip: !hasBin }, async () => {
   let totalFindings = 0; let checkedAny = false; const rows: string[] = []
   for (const path of PDFS) {
@@ -63,11 +70,12 @@ test('measurement: real-sample finding magnitude distribution (structure-only)',
     const init = await p.initializeUpload(sessionId, ws.id)
     const up = await p.completeUpload({ uploadId: init.id, token: init.token, fileName: path.split('/').pop() ?? 'r.pdf', mediaType: 'application/pdf', bytes: readFileSync(path) })
     const report = await p.parseReport(sessionId, up.id)
-    await p.completeReview(sessionId, report.id)
+    await confirmAllReviewValues(p, sessionId, report.id)
     const proposed = await p.proposeMatches(sessionId, report.id)
     const confirmable = proposed.filter(mt => mt.tradelineIds.length <= 3)
     const withheldCollisionSets = proposed.length - confirmable.length
     for (const mt of confirmable) await p.decideMatch(sessionId, mt.id, 'confirmed', 'measurement')
+    for (const mt of proposed.filter(mt => mt.tradelineIds.length > 3)) await p.decideMatch(sessionId, mt.id, 'rejected', 'measurement excludes unresolved collision set')
     const analysis = await p.runAnalysis(sessionId, report.id, publishRules(p), 'US-CA')
 
     const bins: Record<string, number> = { '<$10': 0, '$10-100': 0, '$100-1k': 0, '>$1k': 0 }

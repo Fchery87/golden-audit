@@ -118,7 +118,7 @@ async function advance(key: StepKey, s: FlowSnapshot, form: FormState): Promise<
       return { ...s, uploadComplete: true, kickoff: null }
     }
     case 'kickoff': {
-      const res = await api.kickoffAnalysis(s.uploadId ?? '', true)
+      const res = await api.kickoffAnalysis(s.uploadId ?? '')
       return { ...s, kickoff: res }
     }
   }

@@ -34,7 +34,12 @@
        }
      ],
      "vars": {
-       "PILOT_APPROVAL_RECORD_PATH": "docs/pilot-approval-records.json",
+       "PILOT_RUNTIME_MODE": "fixture",
+       // Fixture mode is diagnostic-only. Before any real-consumer deployment, set this to
+       // `real-consumer` and provide a versioned, non-secret PILOT_APPROVAL_RECORD_JSON containing
+       // an approved launch scope plus accountable evidence for every required approval area.
+       // A local file path cannot be read by Pages Functions and is intentionally unsupported.
+       "PILOT_APPROVAL_RECORD_JSON": "",
        "PILOT_SCOPE": "california-one-state-pilot",
        // D10: replace before enabling delivery. The domain must be an HTTPS app origin you control,
        // and the sender must be verified in Cloudflare Email Service.

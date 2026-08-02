@@ -24,7 +24,7 @@ export type ParserPaymentHistoryCell = ParserValue<string> & { yearMonth: string
 export type ParserTradeline = {
   id: string
   bureau: Bureau
-  creditor: string
+  creditor: ParserValue<string>
   maskedAccount: string
   accountType: ParserValue<string>
   balance: ParserValue<number>
@@ -39,9 +39,26 @@ export type ParserTradeline = {
   specialCommentCodes: ParserValue<string>[]
 }
 
+export type ParserInquiry = {
+  id: string
+  bureau: Bureau
+  creditor: ParserValue<string>
+  businessType: ParserValue<string>
+  date: ParserValue<string>
+}
+
+export type ParserScore = {
+  bureau: Bureau
+  score: ParserValue<number>
+  scale: ParserValue<string>
+}
+
 export type ParserReport = {
   provider: string
   template: string
   reportDate: string | null
+  identity: ParserValue<string>[]
   tradelines: ParserTradeline[]
+  inquiries: ParserInquiry[]
+  scores: ParserScore[]
 }

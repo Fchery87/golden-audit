@@ -62,12 +62,19 @@ async function runSyntheticAnalysis(platform: CreditAnalysisPlatform, sessionId:
   })}</body></html>`)
   const upload = await platform.completeUpload({ uploadId: initialized.id, token: initialized.token, fileName: 'report.html', mediaType: 'text/html', bytes })
   const report = await platform.parseReport(sessionId, upload.id)
-  await platform.completeReview(sessionId, report.id)
+  await confirmAllReviewValues(platform, sessionId, report.id)
   const proposed = await platform.proposeMatches(sessionId, report.id)
   for (const match of proposed) await platform.decideMatch(sessionId, match.id, 'confirmed', 'quality measurement fixture')
   const analysis = await platform.runAnalysis(sessionId, report.id, publishFixtureRules(platform), input.jurisdiction ?? 'US-CA')
   return { upload, report, proposed, analysis }
 }
+
+async function confirmAllReviewValues(platform: CreditAnalysisPlatform, sessionId: string, reportId: string): Promise<void> {
+  const review = await platform.getValueReview(sessionId, reportId)
+  for (const value of review.values) await platform.reviewValue(sessionId, reportId, value.id, { decision: 'confirmed', reason: 'Synthetic or measurement fixture confirmation.' })
+  await platform.completeReview(sessionId, reportId)
+}
+
 
 test('quality reporting: segments metrics by provider, document type, and jurisdiction with latency summaries', async () => {
   const { platform, sessionId, workspace } = await setup('quality-a@example.com', 'US-CA')

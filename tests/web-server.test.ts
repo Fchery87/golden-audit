@@ -68,9 +68,11 @@ type UploadCompleteResponse = {
 }
 
 type KickoffResponse = {
-  status: 'analysis-complete' | 'match-review-required'
+  status: 'analysis-complete' | 'value-review-required' | 'match-review-required' | 'review-complete'
   reportId: string
-  matches: Array<{ id: string; state: string; confidence: number; tradelineIds: string[]; signals: string[] }>
+  matches?: Array<{ id: string; state: string; confidence: number; tradelineIds: string[]; signals: string[] }>
+  required?: number
+  decided?: number
   tradelines?: Array<{ id: string; creditor: string; maskedAccount: string; bureau: string; balanceCents: number | null }>
   analysisId?: string
   consumerReportId?: string
@@ -88,12 +90,25 @@ type ConsumerReportResponse = {
   analysisId: string
   findings: Array<{ id: string }>
   limitations: string[]
+  content?: { accountRows?: Array<{ bureau: string; cells: Array<{ label: string; value: string; source: { kind: string; locator: string } }> }> }
 }
 
 type ExportResponse = {
   id: string
   reportId: string
   content: string
+}
+
+async function completeValueReviewFor(port: number, reportId: string, sessionHeader: Record<string, string>): Promise<KickoffResponse> {
+  const review = await getJson<{ values: Array<{ id: string }> }>(port, `/consumer/reports/${reportId}/value-review`, sessionHeader)
+  assert.equal(review.statusCode, 200)
+  for (const value of review.body.values) {
+    const decision = await postJson(port, `/consumer/reports/${reportId}/values/${value.id}/decision`, { decision: 'confirmed', reason: 'Synthetic integration fixture confirmed.' }, sessionHeader)
+    assert.equal(decision.statusCode, 200)
+  }
+  const completed = await postJson<KickoffResponse>(port, `/consumer/reports/${reportId}/value-review`, {}, sessionHeader)
+  assert.ok(completed.statusCode === 201 || completed.statusCode === 202)
+  return completed.body
 }
 
 function getJson<T>(port: number, path: string, headers: Record<string, string> = {}): Promise<JsonResponse<T>> {
@@ -318,29 +333,41 @@ test('web boundary supports the smallest real consumer pilot flow through analys
 
     const kickoff = await postJson<KickoffResponse>(port, `/consumer/uploads/${uploadComplete.body.id}/kickoff-analysis`, {
       jurisdiction: 'CA',
-      autoConfirmSimpleMatches: true,
     }, sessionHeader)
-    assert.equal(kickoff.statusCode, 201)
-    assert.equal(kickoff.body.status, 'analysis-complete')
+    assert.equal(kickoff.statusCode, 202)
+    assert.equal(kickoff.body.status, 'value-review-required')
+    const reviewCompleted = await completeValueReviewFor(port, kickoff.body.reportId, sessionHeader)
+    assert.equal(reviewCompleted.status, 'match-review-required')
+    assert.equal(reviewCompleted.matches?.length, 1)
+    assert.equal(reviewCompleted.matches?.[0]?.state, 'split')
+    const confirmed = await postJson<{ id: string; state: string }>(port, `/consumer/matches/${reviewCompleted.matches?.[0]?.id}/decision`, { action: 'confirmed', reason: 'I reviewed this two-account match.' }, sessionHeader)
+    assert.equal(confirmed.statusCode, 200)
+    const completed = await postJson<KickoffResponse>(port, `/consumer/reports/${kickoff.body.reportId}/complete-analysis`, { jurisdiction: 'CA' }, sessionHeader)
+    assert.equal(completed.statusCode, 201)
+    assert.equal(completed.body.status, 'analysis-complete')
+    const analysisId = completed.body.analysisId
+    const consumerReportId = completed.body.consumerReportId
+    const exportId = completed.body.exportId
     assert.match(kickoff.body.reportId, /[0-9a-f-]{36}/i)
-    assert.equal(kickoff.body.matches.length, 1)
-    assert.equal(kickoff.body.matches[0]?.state, 'confirmed')
-    assert.equal(kickoff.body.matches[0]?.confidence, 0.72)
-    assert.match(kickoff.body.analysisId ?? '', /[0-9a-f-]{36}/i)
-    assert.match(kickoff.body.consumerReportId ?? '', /[0-9a-f-]{36}/i)
-    assert.match(kickoff.body.exportId ?? '', /[0-9a-f-]{36}/i)
+    assert.match(analysisId ?? '', /[0-9a-f-]{36}/i)
+    assert.match(consumerReportId ?? '', /[0-9a-f-]{36}/i)
+    assert.match(exportId ?? '', /[0-9a-f-]{36}/i)
 
-    const analysis = await getJson<AnalysisResponse>(port, `/consumer/analyses/${kickoff.body.analysisId}`, sessionHeader)
+    const analysis = await getJson<AnalysisResponse>(port, `/consumer/analyses/${analysisId}`, sessionHeader)
     assert.equal(analysis.statusCode, 200)
     assert.equal(analysis.body.reportId, kickoff.body.reportId)
     assert.ok(analysis.body.findings.length >= 1)
 
-    const consumerReport = await getJson<ConsumerReportResponse>(port, `/consumer/reports/${kickoff.body.consumerReportId}`, sessionHeader)
+    const consumerReport = await getJson<ConsumerReportResponse>(port, `/consumer/reports/${consumerReportId}`, sessionHeader)
     assert.equal(consumerReport.statusCode, 200)
-    assert.equal(consumerReport.body.analysisId, kickoff.body.analysisId)
+    assert.equal(consumerReport.body.analysisId, analysisId)
     assert.match(consumerReport.body.limitations.join(' '), /Educational information only/)
+    assert.equal(consumerReport.body.content?.accountRows?.length, 2)
+    assert.equal(consumerReport.body.content?.accountRows?.[0]?.cells.find(cell => cell.label === 'Creditor')?.value, 'Example Bank')
+    assert.match(consumerReport.body.content?.accountRows?.[0]?.cells.find(cell => cell.label === 'Creditor')?.source.locator ?? '', /^0:creditor$/)
+    assert.equal(consumerReport.body.content?.accountRows?.some(row => row.cells.some(cell => /inquiry/i.test(cell.label))), false)
 
-    const exportArtifact = await getJson<ExportResponse>(port, `/consumer/exports/${kickoff.body.exportId}`, sessionHeader)
+    const exportArtifact = await getJson<ExportResponse>(port, `/consumer/exports/${exportId}`, sessionHeader)
     assert.equal(exportArtifact.statusCode, 200)
     assert.match(exportArtifact.body.content, /Educational information only/)
   } finally {
@@ -401,15 +428,14 @@ test('web boundary supports manual subgroup confirmation for oversized collision
       autoConfirmSimpleMatches: false,
     }, sessionHeader)
     assert.equal(kickoff.statusCode, 202)
-    assert.equal(kickoff.body.status, 'match-review-required')
-    assert.equal(kickoff.body.matches.length, 1)
-    assert.equal(kickoff.body.matches[0]?.state, 'split')
-    assert.ok(kickoff.body.matches[0]?.signals.includes('collision-set'))
-    assert.ok(Array.isArray(kickoff.body.tradelines) && (kickoff.body.tradelines?.length ?? 0) === 4)
-    assert.ok(kickoff.body.tradelines?.every(t => typeof t.creditor === 'string' && typeof t.maskedAccount === 'string'))
-
-    const subgroup = await postJson<{ id: string; state: string; tradelineIds: string[] }>(port, `/consumer/matches/${kickoff.body.matches[0]?.id}/confirm-subgroup`, {
-      tradelineIds: kickoff.body.matches[0]?.tradelineIds.slice(0, 2) ?? [],
+    assert.equal(kickoff.body.status, 'value-review-required')
+    const reviewCompleted = await completeValueReviewFor(port, kickoff.body.reportId, sessionHeader)
+    assert.equal(reviewCompleted.status, 'match-review-required')
+    assert.equal(reviewCompleted.matches?.length, 1)
+    assert.equal(reviewCompleted.matches?.[0]?.state, 'split')
+    assert.ok(reviewCompleted.matches?.[0]?.signals.includes('collision-set'))
+    const subgroup = await postJson<{ id: string; state: string; tradelineIds: string[] }>(port, `/consumer/matches/${reviewCompleted.matches?.[0]?.id}/confirm-subgroup`, {
+      tradelineIds: reviewCompleted.matches?.[0]?.tradelineIds.slice(0, 2) ?? [],
       reason: 'Consumer confirmed subgroup',
     }, sessionHeader)
     assert.equal(subgroup.statusCode, 201)

@@ -119,6 +119,72 @@
   }
 }
 
+.admin-shell {
+  max-width: 880px;
+  margin: 0 auto;
+}
+.admin-shell > header,
+.admin-shell > p {
+  max-width: 70ch;
+}
+.admin-shell h1 {
+  font-size: 2rem;
+  line-height: 1.15;
+  margin: 0 0 0.75rem;
+}
+.admin-form {
+  display: grid;
+  gap: 1.25rem;
+  margin-top: 2rem;
+}
+.admin-form label,
+.admin-form fieldset {
+  display: grid;
+  gap: 0.4rem;
+  font-size: 0.95rem;
+}
+.admin-form label > span {
+  color: var(--muted-foreground);
+  font-size: 0.85rem;
+}
+.admin-form textarea,
+.admin-form select {
+  width: 100%;
+  background: var(--paper);
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  color: var(--foreground);
+  font: inherit;
+  padding: 0.55rem 0.7rem;
+}
+.admin-form fieldset {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  border: 1px solid var(--rule);
+  padding: 1rem;
+}
+.admin-form legend { padding: 0 0.35rem; }
+.admin-field-grid { display: grid; gap: 1rem; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.admin-actions { display: flex; flex-wrap: wrap; gap: 0.75rem; }
+.form-error { color: var(--negative); }
+.form-status { color: var(--positive); }
+.report-identity { display: flex; align-items: start; gap: 1rem; }
+.report-identity > div { flex: 1; }
+.report-logo { max-width: 60px; max-height: 60px; object-fit: contain; }
+.report-prepared-by { color: var(--muted-foreground); font-size: 0.875rem; margin: 0; text-align: right; }
+.report-overview { display: grid; gap: 1px; grid-template-columns: repeat(3, minmax(0, 1fr)); margin: 2rem 0; background: var(--rule); border: 1px solid var(--rule); }
+.report-overview div { background: var(--paper); padding: 1rem; }
+.report-overview span { display: block; color: var(--muted-foreground); font-size: 0.8rem; }
+.report-overview strong { display: block; font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 1.35rem; margin-top: 0.25rem; }
+.report-accent-charcoal .report-overview strong { color: #403c35; }
+.report-accent-sage .report-overview strong { color: #3f7d5c; }
+.report-closing-note { border-top: 1px solid var(--rule); margin-top: 2.5rem; padding-top: 1.25rem; }
+.report-contact { border-top: 1px solid var(--rule); color: var(--muted-foreground); display: flex; flex-wrap: wrap; gap: 0.75rem; margin-top: 2.5rem; padding-top: 1rem; font-size: 0.875rem; }
+@media (max-width: 640px) {
+  .admin-field-grid, .admin-form fieldset, .report-overview { grid-template-columns: 1fr; }
+  .report-identity { display: block; }
+  .report-prepared-by { margin-top: 0.75rem; text-align: left; }
+}
+
 @media print {
   @page { margin: 16mm; }
   .no-print, .skip-link { display: none !important; }

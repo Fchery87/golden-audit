@@ -69,7 +69,7 @@ export function parseStructuredHtml(content: string, provider = 'sample-educatio
       : value<number>(bureau, 'balance', minor, balanceCell, `tradelines/tr[${rowIndex}]/td[3]`, 1, 'known')
     tradelines.push({
       id, bureau,
-      creditor,
+      creditor: value(bureau, 'creditor', creditor, creditor, `tradelines/tr[${rowIndex}]/td[1]`, 1, 'known'),
       maskedAccount: maskAccount(account),
       accountType: value<string>(bureau, 'accountType', null, '', `tradelines/tr[${rowIndex}]/accountType`, 0, 'unknown'),
       balance,
@@ -85,5 +85,5 @@ export function parseStructuredHtml(content: string, provider = 'sample-educatio
     })
     rowIndex += 1
   }
-  return { provider, template, reportDate, tradelines }
+  return { provider, template, reportDate, identity: [], tradelines, inquiries: [], scores: [] }
 }

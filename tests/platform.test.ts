@@ -2,7 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { existsSync, readFileSync } from 'node:fs'
 import { execSync } from 'node:child_process'
-import { CreditAnalysisPlatform, type Bureau } from '../packages/platform/src/index.js'
+import { CreditAnalysisPlatform, type Bureau, type ReportPresentationProfile } from '../packages/platform/src/index.js'
 
 const password = 'correct horse battery staple'
 const consent = { version: '2026-01', adultUSConsumer: true, authorizedReportUse: true, educationalLimitations: true, sensitiveDataHandling: true, residence: 'US-CA', analysisJurisdiction: 'US-CA' } as const
@@ -14,6 +14,12 @@ const reportInput = {
   ],
 }
 
+async function completeAllReviewValues(platform: CreditAnalysisPlatform, sessionId: string, reportId: string): Promise<void> {
+  const review = await platform.getValueReview(sessionId, reportId)
+  for (const value of review.values) await platform.reviewValue(sessionId, reportId, value.id, { decision: 'confirmed', reason: 'Synthetic fixture value confirmed for test.' })
+  await platform.completeReview(sessionId, reportId)
+}
+
 // D10: registration requires a single-use invite code. Every test that registers an account
 // mints its own via issueInvite() — the operator-facing path (no HTTP route exposes this;
 // invite-only means codes are issued out of band).
@@ -22,7 +28,28 @@ async function registerAccount(platform: CreditAnalysisPlatform, email: string):
   return platform.register({ email, password, inviteCode })
 }
 
-// === Wiring proof: the proven IdentityIQ PDF adapter is now the LIVE ingestion path (ticket 13). ===
+test('owner presentation profile is validated, owner-scoped, csrf-protected, and snapshotted prospectively', async () => {
+  const previousOwner = process.env.GOLDEN_AUDIT_OWNER_EMAIL
+  process.env.GOLDEN_AUDIT_OWNER_EMAIL = 'owner@example.com'
+  try {
+    const platform = new CreditAnalysisPlatform(undefined, undefined, undefined, process.env.GOLDEN_AUDIT_OWNER_EMAIL)
+    platform.configureLaunchScope({ mode: 'one-state-free-pilot', approvedStates: ['US-CA'], provisionalSelectedState: 'US-CA', stateSelectionEvidenceReference: 'memo', availabilityClaim: 'Pilot limited to approved states.', pricingMode: 'free-pilot-only', nationwideStatus: 'not-cleared', notes: 'Educational analysis only.' })
+    const owner = await registerAccount(platform, 'owner@example.com')
+    const consumer = await registerAccount(platform, 'consumer-two@example.com')
+    const dashboard = await platform.getAdminDashboard(owner.sessionId)
+    await assert.rejects(() => platform.updateReportPresentationProfile(consumer.sessionId, 'wrong', dashboard.profile.revision, { organizationName: 'Nope' }), /Owner authorization|required|request protection/)
+    await assert.rejects(() => platform.updateReportPresentationProfile(owner.sessionId, 'wrong', dashboard.profile.revision, { organizationName: 'Updated Audit' }), /request protection/)
+    const saved = await platform.updateReportPresentationProfile(owner.sessionId, dashboard.csrfToken, dashboard.profile.revision, { organizationName: 'Updated Audit', supportEmail: '' })
+    assert.equal(saved.organizationName, 'Updated Audit')
+    assert.equal(saved.supportEmail, undefined)
+    await assert.rejects(() => platform.updateReportPresentationProfile(owner.sessionId, dashboard.csrfToken, saved.revision, { unknownField: 'not allowed' } as Partial<ReportPresentationProfile>), /unsupported field/)
+  } finally {
+    if (previousOwner === undefined) delete process.env.GOLDEN_AUDIT_OWNER_EMAIL
+    else process.env.GOLDEN_AUDIT_OWNER_EMAIL = previousOwner
+  }
+})
+
+
 // Uploads a real (gitignored) IdentityIQ PDF through the full platform flow and asserts it routed through
 // the REAL adapter — not the synthetic fixture marker. Structure-only; never asserts or prints values.
 const WIRING_PDFS = [
@@ -46,7 +73,9 @@ test('wiring: completeUpload(pdf) → parseReport routes through the real Identi
     const realAdapter = report.provider === 'identityiq' && report.template === 'identityiq-pdf-v1' // NOT 'synthetic-provider'/'pilot-v1'
     const threeBureaus = bureaus.has('transunion') && bureaus.has('experian') && bureaus.has('equifax')
     const usdBalances = report.tradelines.every(t => t.balance.currency === 'USD' && t.balance.state === 'known')
-    if (!realAdapter || report.tradelines.length === 0 || !threeBureaus || !usdBalances) failed.push(`${p}: provider=${report.provider} template=${report.template} tradelines=${report.tradelines.length} bureaus=[${[...bureaus].join(',')}] usd=${usdBalances}`)
+    const scoreIntegrity = report.scores.length === 3 && report.scores.every(score => score.state === 'known' && score.scale.state === 'known' && Boolean(score.source.locator) && Boolean(score.scale.source.locator) && score.normalized !== null && /^\d{3}-\d{3}$/.test(score.scale.normalized ?? ''))
+    const inquiryIntegrity = report.inquiries.every(inquiry => inquiry.creditor.state === 'known' && inquiry.date.state === 'known' && inquiry.date.normalized !== null && Boolean(inquiry.creditor.source.locator) && Boolean(inquiry.date.source.locator))
+    if (!realAdapter || report.tradelines.length === 0 || !threeBureaus || !usdBalances || !scoreIntegrity || !inquiryIntegrity) failed.push(`${p}: adapter=${realAdapter} tradelines=${report.tradelines.length} scores=${report.scores.length} inquiries=${report.inquiries.length} bureaus=[${[...bureaus].join(',')}]`)
     // assert NOTHING about balance amounts or account numbers — structure only.
   }
   if (!checkedAny) return // all real files absent (gitignored) → pass vacuously in CI
@@ -143,6 +172,33 @@ test('ticket 04: parsing preserves bureau provenance, masks identifiers, and aud
   const corrected = await platform.reviewValue(sessionId, report.id, balance.id, { decision: 'corrected', reason: 'Compared with statement', replacement: 12000 }); assert.equal(corrected.normalizedVersion, 2); assert.equal(corrected.tradelines[0]?.balance.review?.replacement, 12000); assert.equal(corrected.tradelines[0]?.balance.originalDisplay, '$125.00')
 })
 
+test('source-value review is owner-scoped and reviewed corrections drive matching, analysis, report snapshots, and exports', async () => {
+  const { platform, sessionId, workspace } = await setup()
+  const { report } = await uploadAndParse(platform, sessionId, workspace.id)
+  const other = await registerAccount(platform, 'review-intruder@example.com')
+  const review = await platform.getValueReview(sessionId, report.id)
+  await assert.rejects(() => platform.getValueReview(other.sessionId, report.id), /Not found/)
+  await assert.rejects(() => platform.reviewValue(other.sessionId, report.id, review.values[0]!.id, { decision: 'confirmed', reason: 'intruder' }), /Not found/)
+  const balance = review.values.find(value => value.field === 'balance' && value.bureau === 'equifax')!
+  const creditor = review.values.find(value => value.field === 'creditor' && value.bureau === 'equifax')!
+  await platform.reviewValue(sessionId, report.id, balance.id, { decision: 'corrected', reason: 'Statement shows a corrected balance.', replacement: 15000 })
+  await platform.reviewValue(sessionId, report.id, creditor.id, { decision: 'unknown', reason: 'Cannot confirm this creditor.' })
+  for (const value of (await platform.getValueReview(sessionId, report.id)).values.filter(value => !value.review)) await platform.reviewValue(sessionId, report.id, value.id, { decision: 'confirmed', reason: 'Confirmed fixture value.' })
+  await platform.completeReview(sessionId, report.id)
+  const matches = await platform.proposeMatches(sessionId, report.id)
+  assert.equal(matches.length, 0, 'unknown creditor removes the otherwise matchable account from grouping')
+  const analysis = await platform.runAnalysis(sessionId, report.id, publishFixtureRules(platform), 'US-CA')
+  assert.equal(analysis.findings.length, 0, 'unavailable match input suppresses dependent comparison')
+  const consumerReport = await platform.createConsumerReport(sessionId, analysis.id)
+  const correctedBalance = consumerReport.content?.accountRows?.find(row => row.bureau === 'equifax')?.cells.find(cell => cell.label === 'Balance')
+  assert.equal(correctedBalance?.value, '$150.00')
+  const exported = await platform.createExport(sessionId, consumerReport.id)
+  assert.match(exported.content, /\$150\.00/)
+  const stored = await platform.getValueReview(sessionId, report.id)
+  assert.equal(stored.values.find(value => value.id === balance.id)?.originalDisplay, '$125.00')
+  assert.equal(stored.values.find(value => value.id === balance.id)?.review?.replacement, 15000)
+})
+
 test('ticket 05: governance publishes only approved immutable effective content', () => {
   const platform = new CreditAnalysisPlatform(); const version = publishFixtureRules(platform); const effective = platform.getEffectiveRules('US-CA', '2026-07-01'); assert.equal(effective.length, 1); assert.equal(effective[0]?.version, version); assert.equal(effective[0]?.status, 'published'); assert.equal(platform.getEffectiveAuthorities('US-CA', '2026-07-01').length, 1); assert.equal(platform.getEffectiveEducationModules('US-CA', '2026-07-01').length, 1)
   assert.throws(() => platform.createRule('intruder', { name: 'unauthorized', jurisdiction: 'US-CA', effectiveFrom: '2020-01-01', requiredInputs: ['balance'], minimumConfidence: 1, classification: 'observed-fact', limitations: [], authorityIds: [], educationModuleIds: [], testCases: ['fixture'] }), /not authorized/)
@@ -150,7 +206,7 @@ test('ticket 05: governance publishes only approved immutable effective content'
 })
 
 test('tickets 06-08: confirmed matching drives deterministic findings and user-controlled report actions', async () => {
-  const { platform, sessionId, workspace } = await setup(); const { report } = await uploadAndParse(platform, sessionId, workspace.id); const ruleset = publishFixtureRules(platform); await platform.completeReview(sessionId, report.id)
+  const { platform, sessionId, workspace } = await setup(); const { report } = await uploadAndParse(platform, sessionId, workspace.id); const ruleset = publishFixtureRules(platform); await completeAllReviewValues(platform, sessionId, report.id)
   const matches = await platform.proposeMatches(sessionId, report.id); assert.equal(matches.length, 1); assert.equal(matches[0]?.confidence, 0.72); assert.equal(matches[0]?.state, 'split')
   const confirmed = await platform.decideMatch(sessionId, matches[0]!.id, 'confirmed', 'Same account verified by consumer'); assert.equal(confirmed.history.length, 1)
   const first = await platform.runAnalysis(sessionId, report.id, ruleset, 'US-CA'); const second = await platform.runAnalysis(sessionId, report.id, ruleset, 'US-CA'); assert.equal(first.findings.length, 1); assert.deepEqual(first.findings.map(({ id: _id, ...finding }) => finding), second.findings.map(({ id: _id, ...finding }) => finding)); assert.equal(first.findings[0]?.classification, 'verification-recommended'); assert.equal(first.audit[0]?.outcome, 'triggered'); assert.match(first.findings[0]?.alternativeExplanations[0] ?? '', /different dates/i)
@@ -171,7 +227,7 @@ test('ticket 06 hardening: oversized collision sets require consumer-confirmed s
   }
   const upload = await platform.completeUpload({ uploadId: initialized.id, token: initialized.token, fileName: 'oversized.html', mediaType: 'text/html', bytes: Buffer.from(`<html>GOLDEN-AUDIT-REPORT:${JSON.stringify(oversize)}</body></html>`) })
   const report = await platform.parseReport(sessionId, upload.id)
-  await platform.completeReview(sessionId, report.id)
+  await completeAllReviewValues(platform, sessionId, report.id)
   const matches = await platform.proposeMatches(sessionId, report.id)
   assert.equal(matches.length, 1)
   assert.equal(matches[0]?.state, 'split')
@@ -188,7 +244,7 @@ test('ticket 06 hardening: oversized collision sets require consumer-confirmed s
 
 test('ticket 07 suppression: low-confidence evidence does not create a weak finding', async () => {
   const lowConfidence = { ...structuredClone(reportInput), tradelines: structuredClone(reportInput.tradelines).map((line, index) => index === 0 ? { ...line, confidence: 0.4 } : line) }
-  const { platform, sessionId, workspace } = await setup(); const initialized = await platform.initializeUpload(sessionId, workspace.id); const upload = await platform.completeUpload({ uploadId: initialized.id, token: initialized.token, fileName: 'low.html', mediaType: 'text/html', bytes: Buffer.from(`<html>GOLDEN-AUDIT-REPORT:${JSON.stringify(lowConfidence)}</body></html>`) }); const report = await platform.parseReport(sessionId, upload.id); await platform.completeReview(sessionId, report.id); const match = (await platform.proposeMatches(sessionId, report.id))[0]!; await platform.decideMatch(sessionId, match.id, 'confirmed', 'fixture'); const analysis = await platform.runAnalysis(sessionId, report.id, publishFixtureRules(platform), 'US-CA'); assert.equal(analysis.findings.length, 0); assert.equal(analysis.audit[0]?.outcome, 'suppressed')
+  const { platform, sessionId, workspace } = await setup(); const initialized = await platform.initializeUpload(sessionId, workspace.id); const upload = await platform.completeUpload({ uploadId: initialized.id, token: initialized.token, fileName: 'low.html', mediaType: 'text/html', bytes: Buffer.from(`<html>GOLDEN-AUDIT-REPORT:${JSON.stringify(lowConfidence)}</body></html>`) }); const report = await platform.parseReport(sessionId, upload.id); await completeAllReviewValues(platform, sessionId, report.id); const match = (await platform.proposeMatches(sessionId, report.id))[0]!; await platform.decideMatch(sessionId, match.id, 'confirmed', 'fixture'); const analysis = await platform.runAnalysis(sessionId, report.id, publishFixtureRules(platform), 'US-CA'); assert.equal(analysis.findings.length, 0); assert.equal(analysis.audit[0]?.outcome, 'suppressed')
 })
 
 test('Phase 5: supported Slice 2 values survive parsing, review lookup, report coverage, and masked export without a DOFD finding', async () => {
@@ -206,12 +262,19 @@ test('Phase 5: supported Slice 2 values survive parsing, review lookup, report c
   assert.equal(first.remarks[0]?.normalized, 'Consumer disputes this account')
   assert.equal(first.specialCommentCodes[0]?.normalized, 'AW')
   assert.equal((await platform.getSourceSnippet(sessionId, report.id, first.specialCommentCodes[0]!.id)).locator, '0:specialCommentCode:0')
-  await platform.completeReview(sessionId, report.id)
+  await completeAllReviewValues(platform, sessionId, report.id)
   const match = (await platform.proposeMatches(sessionId, report.id))[0]!
   await platform.decideMatch(sessionId, match.id, 'confirmed', 'fixture')
   const analysis = await platform.runAnalysis(sessionId, report.id, publishFixtureRules(platform), 'US-CA')
   const consumerReport = await platform.createConsumerReport(sessionId, analysis.id)
   const fields = new Map(consumerReport.content?.parserFields.map(field => [field.field, field]))
+  const accountRows = consumerReport.content?.accountRows ?? []
+  assert.equal(accountRows.length, 2)
+  assert.equal(accountRows[0]?.cells.find(cell => cell.label === 'Creditor')?.value, 'Example Bank')
+  assert.equal(accountRows[0]?.cells.some(cell => cell.label === 'Account'), false)
+  assert.match(accountRows[0]?.cells.find(cell => cell.label === 'Creditor')?.source.locator ?? '', /^0:creditor$/)
+  assert.equal(accountRows[0]?.cells.some(cell => cell.label === 'Date of first delinquency'), true)
+  assert.equal(accountRows.some(row => row.cells.some(cell => cell.label.toLowerCase().includes('inquiry'))), false)
   assert.equal(fields.get('dateOfFirstDelinquency')?.capability, 'supported')
   assert.equal(fields.get('paymentHistory')?.states.known, 4)
   assert.equal(fields.get('remarks')?.states.known, 2)
@@ -220,9 +283,31 @@ test('Phase 5: supported Slice 2 values survive parsing, review lookup, report c
   const exported = await platform.createExport(sessionId, consumerReport.id)
   assert.match(exported.content, /dateOfFirstDelinquency/)
   assert.match(exported.content, /paymentHistory/)
+  assert.match(exported.content, /accountRows/)
+  assert.doesNotMatch(exported.content, /12345678/)
 })
+test('extended-analysis snapshots retain only source-backed score and inquiry rows', async () => {
+  const { platform, sessionId, workspace } = await setup()
+  const { report } = await uploadAndParse(platform, sessionId, workspace.id)
+  await completeAllReviewValues(platform, sessionId, report.id)
+  const match = (await platform.proposeMatches(sessionId, report.id))[0]!
+  await platform.decideMatch(sessionId, match.id, 'confirmed', 'fixture')
+  const analysis = await platform.runAnalysis(sessionId, report.id, publishFixtureRules(platform), 'US-CA')
+  const consumerReport = await platform.createConsumerReport(sessionId, analysis.id)
+  assert.equal(consumerReport.content?.scoreRows, undefined)
+  assert.equal(consumerReport.content?.scoreRows, undefined)
+  assert.equal(consumerReport.content?.inquiryRows, undefined)
+  assert.equal(consumerReport.content?.parserFields.find(field => field.field === 'score')?.states.known, 1)
+  assert.equal(consumerReport.content?.parserFields.find(field => field.field === 'score')?.states.unknown, 1)
+  assert.equal(consumerReport.content?.parserFields.find(field => field.field === 'inquiry')?.states.known, 1)
+  assert.equal(consumerReport.content?.parserFields.find(field => field.field === 'inquiry')?.states.unknown, 1)
+  const exported = await platform.createExport(sessionId, consumerReport.id)
+  assert.doesNotMatch(exported.content, /scoreRows/)
+  assert.doesNotMatch(exported.content, /inquiryRows/)
+})
+
 test('tickets 09-10: masked idempotent export, scoped deletion, and safe narration fallback', async () => {
-  const { platform, sessionId, workspace } = await setup(); const { report } = await uploadAndParse(platform, sessionId, workspace.id); await platform.completeReview(sessionId, report.id); const match = (await platform.proposeMatches(sessionId, report.id))[0]!; await platform.decideMatch(sessionId, match.id, 'confirmed', 'verified'); const analysis = await platform.runAnalysis(sessionId, report.id, publishFixtureRules(platform), 'US-CA'); const consumerReport = await platform.createConsumerReport(sessionId, analysis.id)
+  const { platform, sessionId, workspace } = await setup(); const { report } = await uploadAndParse(platform, sessionId, workspace.id); await completeAllReviewValues(platform, sessionId, report.id); const match = (await platform.proposeMatches(sessionId, report.id))[0]!; await platform.decideMatch(sessionId, match.id, 'confirmed', 'verified'); const analysis = await platform.runAnalysis(sessionId, report.id, publishFixtureRules(platform), 'US-CA'); const consumerReport = await platform.createConsumerReport(sessionId, analysis.id)
   const firstExport = await platform.createExport(sessionId, consumerReport.id); const secondExport = await platform.createExport(sessionId, consumerReport.id); assert.equal(firstExport.id, secondExport.id); assert.doesNotMatch(firstExport.content, /12345678|\b\d{9}\b/); assert.match(firstExport.content, /Educational information only/)
   const fallback = await platform.narrate(sessionId, analysis.id, () => 'This illegal item will be deleted guaranteed'); assert.equal(fallback.mode, 'fallback'); assert.doesNotMatch(fallback.text, /guarantee|illegal/i)
   const generated = await platform.narrate(sessionId, analysis.id, () => 'Bureau balances differ. Different update dates can explain a difference'); assert.equal(generated.mode, 'generated')

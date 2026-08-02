@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import type { Bureau, ParserPaymentHistoryCell, ParserReport, ParserTradeline, ParserValue } from './types.js'
+import type { Bureau, ParserInquiry, ParserPaymentHistoryCell, ParserReport, ParserScore, ParserTradeline, ParserValue } from './types.js'
 import { bureauForX, detectBureauColumns, nearestBureau, CREDITOR_X_MAX, xCenter, type Word } from './positional-types.js'
 
 /**
@@ -50,7 +50,7 @@ function rowValue<T>(
 function cleanCreditor(tokens: string[]): string {
   return tokens
     .map(t => t.replace(/[.,;:()]/g, ''))
-    .filter(t => t.length > 0 && !HEADER_VOCAB.has(t.toLowerCase()) && !/^\d+$/.test(t))
+    .filter(t => t.length > 0 && !/^\d+$/.test(t))
     .join(' ')
     .trim()
 }
@@ -94,18 +94,20 @@ function joined(words: Word[] | undefined): string {
   return (words ?? []).map(word => word.text).join(' ').replace(/\s+/g, ' ').trim()
 }
 
-function findCreditor(rows: Row[], startIndex: number): string {
+function findCreditor(rows: Row[], startIndex: number, bureauOf: (x: number) => Bureau | null): { text: string; row: Row } | undefined {
+  const accountRow = rows[startIndex]
+  if (!accountRow) return undefined
   for (let i = startIndex - 1; i >= 0; i -= 1) {
     const row = rows[i]
-    if (!row) continue
+    if (!row || row.page !== accountRow.page || isAccountStart(row, bureauOf)) break
     const label = leftLabel(row)
     if (!label || HEADER_VOCAB.has(label)) continue
     const hasBureauValues = row.words.some(word => word.xMin >= LEFT_LABEL_X_MAX)
     if (hasBureauValues) continue
-    const candidate = cleanCreditor(row.words.map(w => w.text))
-    if (candidate) return candidate
+    const text = cleanCreditor(row.words.map(w => w.text))
+    if (text) return { text, row }
   }
-  return ''
+  return undefined
 }
 
 function isAccountStart(row: Row, bureauOf: (x: number) => Bureau | null): boolean {
@@ -189,7 +191,7 @@ function buildTradelinesFromAccountBlocks(words: Word[]): ParserTradeline[] {
     const row = rows[index]
     if (!row || !isAccountStart(row, bureauOf)) continue
 
-    const creditor = findCreditor(rows, index)
+    const creditor = findCreditor(rows, index, bureauOf)
     if (!creditor) continue
 
     const fieldRows = new Map<FieldName, Row>()
@@ -248,7 +250,7 @@ function buildTradelinesFromAccountBlocks(words: Word[]): ParserTradeline[] {
       tradelines.push({
         id: randomUUID(),
         bureau,
-        creditor,
+        creditor: rowValue<string>(bureau, 'creditor', creditor.text, creditor.text, creditor.row.page, creditor.row.yMin, FIELD_CONFIDENCE, 'known'),
         maskedAccount: (parseField('maskedAccount', bureau, accountText, row.page, row.yMin) as ParserValue<string>).normalized ?? '',
         accountType: parseField('accountType', bureau, accountTypeText, row.page, row.yMin) as ParserValue<string>,
         balance,
@@ -266,6 +268,11 @@ function buildTradelinesFromAccountBlocks(words: Word[]): ParserTradeline[] {
   }
 
   return tradelines
+}
+
+function isFallbackStructuralLabel(row: Word[]): boolean {
+  const label = row.filter(word => word.xMin < LEFT_LABEL_X_MAX).map(word => word.text).join(' ').replace(/\s+/g, ' ').trim().toLowerCase().replace(/:$/, '')
+  return /^(account\s*#?|account|account type|account status|balance|credit limit|high credit|past due|last reported|date opened|date of first delinquency|payment history|remarks|special comment codes?)$/.test(label)
 }
 
 function buildTradelinesFromBalanceRows(words: Word[]): ParserTradeline[] {
@@ -289,6 +296,7 @@ function buildTradelinesFromBalanceRows(words: Word[]): ParserTradeline[] {
     }
 
     for (const row of rows) {
+      if (isFallbackStructuralLabel(row)) continue
       const bureauMoney = new Map<Bureau, { word: Word; minor: number }>()
       for (const w of row) {
         const bureau = bureauOf(xCenter(w))
@@ -305,7 +313,7 @@ function buildTradelinesFromBalanceRows(words: Word[]): ParserTradeline[] {
         tradelines.push({
           id: randomUUID(),
           bureau,
-          creditor,
+          creditor: rowValue<string>(bureau, 'creditor', creditor, creditor, word.page, word.yMin, FIELD_CONFIDENCE, 'known'),
           maskedAccount: '',
           accountType: rowValue<string>(bureau, 'accountType', null, '', word.page, word.yMin, 0, 'unknown'),
           balance: rowValue<number>(bureau, 'balance', minor, word.text, word.page, word.yMin, 1, 'known'),
@@ -326,11 +334,130 @@ function buildTradelinesFromBalanceRows(words: Word[]): ParserTradeline[] {
   return tradelines
 }
 
+type InquiryColumns = { creditorEnd: number; businessStart: number; dateStart: number; bureauStart: number }
+
+function inquiryColumns(row: Row): InquiryColumns | undefined {
+  const words = row.words
+  const type = words.find(word => /^type$/i.test(word.text))
+  const date = words.find(word => /^date$/i.test(word.text))
+  const credit = words.find(word => /^credit$/i.test(word.text))
+  const hasName = words.some(word => /^name$/i.test(word.text))
+  const hasBusiness = words.some(word => /^business$/i.test(word.text))
+  const hasInquiry = words.some(word => /^inquiry$/i.test(word.text))
+  const hasBureau = words.some(word => /^bureau$/i.test(word.text))
+  if (!type || !date || !credit || !hasName || !hasBusiness || !hasInquiry || !hasBureau) return undefined
+  return { creditorEnd: type.xMin, businessStart: type.xMin, dateStart: date.xMin, bureauStart: credit.xMin }
+}
+
+function parseInquiryDate(display: string): string | null {
+  const match = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(display.trim())
+  if (!match) return null
+  const month = Number(match[1]); const day = Number(match[2]); const year = Number(match[3])
+  if (month < 1 || month > 12 || day < 1 || day > 31) return null
+  const parsed = new Date(Date.UTC(year, month - 1, day))
+  if (parsed.getUTCFullYear() !== year || parsed.getUTCMonth() !== month - 1 || parsed.getUTCDate() !== day) return null
+  return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`
+}
+
+function parseIdentityIqScores(words: Word[]): ParserScore[] {
+  const scores: ParserScore[] = []
+  const rows = groupRows(words)
+  for (let index = 0; index < rows.length; index += 1) {
+    const anchor = rows[index]
+    if (!anchor || !/credit score/i.test(anchor.words.map(word => word.text).join(' ')) || !/back to top/i.test(anchor.words.map(word => word.text).join(' '))) continue
+    const header = rows.slice(index + 1, index + 8).find(row => row?.page === anchor.page && ['transunion', 'experian', 'equifax'].every(name => row.words.some(word => word.text.toLowerCase() === name)))
+    if (!header) continue
+    const headerBureauWords = header.words.filter(word => /^(transunion|experian|equifax)$/i.test(word.text))
+    const headerCounts = new Map<Bureau, number>()
+    for (const word of headerBureauWords) {
+      const bureau = word.text.toLowerCase() as Bureau
+      headerCounts.set(bureau, (headerCounts.get(bureau) ?? 0) + 1)
+    }
+    if (headerCounts.get('transunion') !== 1 || headerCounts.get('experian') !== 1 || headerCounts.get('equifax') !== 1) continue
+    const columns = new Map<Bureau, number>()
+    for (const word of headerBureauWords) {
+      const bureau = word.text.toLowerCase() as Bureau
+      columns.set(bureau, xCenter(word))
+    }
+    const columnAnchors = [...columns].map(([bureau, x]) => ({ bureau, x }))
+    const firstColumnX = Math.min(...columnAnchors.map(column => column.x))
+    const bureauOf = (x: number): Bureau | null => x < firstColumnX - 40 ? null : nearestBureau(x, columnAnchors)
+    const sectionRows = rows.slice(index + 1, index + 16).filter(row => row?.page === anchor.page)
+    const scoreRow = sectionRows.find(row => /^credit\s+score:?$/i.test(leftLabel(row)))
+    const scaleRow = sectionRows.find(row => /^score\s+scale:?$/i.test(leftLabel(row)))
+    if (!scoreRow || !scaleRow) continue
+    const scoreBuckets = bureauWordBuckets(scoreRow, bureauOf)
+    const scaleBuckets = bureauWordBuckets(scaleRow, bureauOf)
+    for (const bureau of ['transunion', 'experian', 'equifax'] as const) {
+      const scoreTokens = (scoreBuckets[bureau] ?? []).map(word => word.text.trim()).filter(token => /^\d{3}$/.test(token))
+      const scaleTokens = (scaleBuckets[bureau] ?? []).map(word => word.text.trim()).filter(token => /^\d{3}-\d{3}$/.test(token))
+      const scoreDisplay = scoreTokens[0] ?? ''; const scaleDisplay = scaleTokens[0] ?? ''
+      const score = scoreTokens.length === 1 ? Number(scoreDisplay) : null
+      const range = scaleTokens.length === 1 ? /^(\d{3})-(\d{3})$/.exec(scaleDisplay) : null
+      if (score === null || !range || score < Number(range[1]) || score > Number(range[2])) continue
+      scores.push({
+        bureau,
+        score: rowValue<number>(bureau, 'score', score, scoreDisplay, scoreRow.page, scoreRow.yMin, FIELD_CONFIDENCE, 'known'),
+        scale: rowValue<string>(bureau, 'scoreScale', scaleDisplay, scaleDisplay, scaleRow.page, scaleRow.yMin, FIELD_CONFIDENCE, 'known'),
+      })
+    }
+  }
+  return scores
+}
+
+function parseIdentityIqInquiries(words: Word[]): ParserInquiry[] {
+  const inquiries: ParserInquiry[] = []
+  const rows = groupRows(words)
+  let columns: InquiryColumns | undefined
+  let active = false
+  for (const row of rows) {
+    const text = row.words.map(word => word.text).join(' ')
+    if (/inquiries/i.test(text) && /back to top/i.test(text)) { active = true; columns = undefined; continue }
+    if (!active) continue
+    const header = inquiryColumns(row)
+    if (header) { columns = header; continue }
+    if (/back to top/i.test(text)) { active = false; columns = undefined; continue }
+    if (!columns) continue
+    const activeColumns = columns
+    const bureauWords = row.words.filter(word => word.xMin >= activeColumns.bureauStart && /^(transunion|experian|equifax)$/i.test(word.text))
+    if (bureauWords.length !== 1) continue
+    const bureau = bureauWords[0]?.text.toLowerCase() as Bureau
+    const dateWords = row.words.filter(word => word.xMin >= activeColumns.dateStart && word.xMin < activeColumns.bureauStart)
+    const dateDisplay = joined(dateWords)
+    const date = parseInquiryDate(dateDisplay)
+    const creditorDisplay = joined(row.words.filter(word => word.xMin < activeColumns.creditorEnd))
+    if (!date || !creditorDisplay) continue
+    const businessDisplay = joined(row.words.filter(word => word.xMin >= activeColumns.businessStart && word.xMin < activeColumns.dateStart))
+    inquiries.push({
+      id: randomUUID(), bureau,
+      creditor: rowValue<string>(bureau, 'inquiryCreditor', creditorDisplay, creditorDisplay, row.page, row.yMin, FIELD_CONFIDENCE, 'known'),
+      businessType: businessDisplay ? rowValue<string>(bureau, 'inquiryBusinessType', businessDisplay, businessDisplay, row.page, row.yMin, FIELD_CONFIDENCE, 'known') : rowValue<string>(bureau, 'inquiryBusinessType', null, '', row.page, row.yMin, 0, 'unknown'),
+      date: rowValue<string>(bureau, 'inquiryDate', date, dateDisplay, row.page, row.yMin, FIELD_CONFIDENCE, 'known'),
+    })
+  }
+  return inquiries
+}
+
+function findConsumerDisplayName(words: Word[]): ParserValue<string>[] {
+  const rows = groupRows(words)
+  for (const row of rows) {
+    const text = row.words.map(word => word.text).join(' ').replace(/\s+/g, ' ').trim()
+    const match = /^name:\s*([A-Z][A-Z .'-]{2,80}?)(?:\s+[A-Z][A-Z .'-]{2,80}?){0,2}\s*$/i.exec(text)
+    const candidate = match?.[1]?.trim().replace(/\s+/g, ' ')
+    if (!candidate || /^(name|personal information)$/i.test(candidate) || /\d/.test(candidate)) continue
+    return [rowValue<string>('unknown', 'consumer-display-name', candidate, candidate, row.page, row.yMin, 0.95, 'known')]
+  }
+  return []
+}
+
 export function parseIdentityIqPdf(words: Word[]): ParserReport {
   const accountBlockTradelines = buildTradelinesFromAccountBlocks(words)
+  const identity = findConsumerDisplayName(words)
   const supportedBureaus = new Set(accountBlockTradelines.map(line => line.bureau))
+  const scores = parseIdentityIqScores(words)
+  const inquiries = parseIdentityIqInquiries(words)
   if (supportedBureaus.has('transunion') && supportedBureaus.has('experian') && supportedBureaus.has('equifax')) {
-    return { provider: 'identityiq', template: 'identityiq-pdf-v1', reportDate: null, tradelines: accountBlockTradelines }
+    return { provider: 'identityiq', template: 'identityiq-pdf-v1', reportDate: null, identity, tradelines: accountBlockTradelines, inquiries, scores }
   }
 
   // Some older IdentityIQ layouts omit an account-block balance in one column while still
@@ -340,5 +467,5 @@ export function parseIdentityIqPdf(words: Word[]): ParserReport {
   // require the omitted fields suppress instead of treating the row as fully reconstructed.
   const fallbackTradelines = buildTradelinesFromBalanceRows(words)
     .filter(line => !supportedBureaus.has(line.bureau))
-  return { provider: 'identityiq', template: 'identityiq-pdf-v1', reportDate: null, tradelines: [...accountBlockTradelines, ...fallbackTradelines] }
+  return { provider: 'identityiq', template: 'identityiq-pdf-v1', reportDate: null, identity, tradelines: [...accountBlockTradelines, ...fallbackTradelines], inquiries, scores }
 }

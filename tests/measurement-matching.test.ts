@@ -41,13 +41,19 @@ function makeFixture(tradelines: InputTradeline[]) {
     tradelines: tradelines.map(t => ({ bureau: t.bureau, creditor: t.creditor, account: t.account, accountType: t.accountType ?? 'revolving', balance: t.balance, status: t.status ?? 'open', opened: t.opened ?? '2020-01', updated: t.updated ?? '2026-06-30' })),
   }
 }
+async function confirmAllReviewValues(platform: CreditAnalysisPlatform, sessionId: string, reportId: string): Promise<void> {
+  const review = await platform.getValueReview(sessionId, reportId)
+  for (const value of review.values) await platform.reviewValue(sessionId, reportId, value.id, { decision: 'confirmed', reason: 'Measurement fixture confirmation.' })
+  await platform.completeReview(sessionId, reportId)
+}
+
 async function uploadAndPropose(tradelines: InputTradeline[]) {
   const { platform, sessionId, workspace } = await setup()
   const initialized = await platform.initializeUpload(sessionId, workspace.id)
   const bytes = Buffer.from(`<html>GOLDEN-AUDIT-REPORT:${JSON.stringify(makeFixture(tradelines))}</body></html>`)
   const upload = await platform.completeUpload({ uploadId: initialized.id, token: initialized.token, fileName: 'match.html', mediaType: 'text/html', bytes })
   const report = await platform.parseReport(sessionId, upload.id)
-  await platform.completeReview(sessionId, report.id)
+  await confirmAllReviewValues(platform, sessionId, report.id)
   const matches = await platform.proposeMatches(sessionId, report.id)
   return { report, matches }
 }
@@ -149,7 +155,7 @@ test('measurement: real-sample match profile (structure-only)', { skip: !hasBin(
     const init = await platform.initializeUpload(sessionId, workspace.id)
     const upload = await platform.completeUpload({ uploadId: init.id, token: init.token, fileName: path.split('/').pop() ?? 'report.pdf', mediaType: 'application/pdf', bytes: readFileSync(path) })
     const report = await platform.parseReport(sessionId, upload.id)
-    await platform.completeReview(sessionId, report.id)
+    await confirmAllReviewValues(platform, sessionId, report.id)
     const matches = await platform.proposeMatches(sessionId, report.id)
     const matchedTradelineIds = new Set(matches.flatMap(m => m.tradelineIds))
     const size2 = matches.filter(m => m.tradelineIds.length === 2).length

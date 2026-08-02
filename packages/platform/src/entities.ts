@@ -34,7 +34,7 @@ export type LaunchScope = {
 }
 
 export type User = { id: Id; email: string; passwordHash: string; passwordSalt: string; consent?: Consent; emailVerifiedAt?: string }
-export type Session = { id: Id; userId: Id; revokedAt?: string; createdAt: string; expiresAt: string; lastUsedAt: string }
+export type Session = { id: Id; userId: Id; csrfToken: string; revokedAt?: string; createdAt: string; expiresAt: string; lastUsedAt: string }
 export type Workspace = { id: Id; userId: Id; createdAt: string }
 
 export type UploadStage = 'initialized' | 'scanning' | 'quarantined' | 'ready-to-parse' | 'retryable-failure' | 'final-failure'
@@ -90,6 +90,10 @@ export type Tradeline = {
   specialCommentCodes: CanonicalValue<string>[]
 }
 
+export type Inquiry = { id: Id; bureau: Bureau; creditor: CanonicalValue<string>; businessType: CanonicalValue<string>; date: CanonicalValue<string> }
+
+export type CanonicalScore = CanonicalValue<number> & { scale: CanonicalValue<string> }
+
 export type CanonicalReport = {
   id: Id
   userId: Id
@@ -104,12 +108,16 @@ export type CanonicalReport = {
   employers: CanonicalValue<string>[]
   tradelines: Tradeline[]
   collections: Tradeline[]
-  inquiries: CanonicalValue<string>[]
+  inquiries: Inquiry[]
   publicRecords: CanonicalValue<string>[]
-  scores: CanonicalValue<number>[]
+  scores: CanonicalScore[]
   remarks: CanonicalValue<string>[]
   reviewComplete: boolean
+  reviewCompletedAt?: string
 }
+
+export type ConsumerReviewValue = { id: Id; bureau: Bureau; field: string; normalized: string | number | null; originalDisplay: string; state: CanonicalValue<unknown>['state']; source: Pick<SourceReference, 'kind' | 'locator'>; confidence: number; review?: CanonicalValue<unknown>['review'] }
+export type ConsumerValueReview = { reportId: Id; required: number; decided: number; complete: boolean; values: ConsumerReviewValue[] }
 
 export type GovernanceStatus = 'draft' | 'approved' | 'rejected' | 'published' | 'disabled'
 export type GovernanceHistory = { action: GovernanceStatus | 'revision-requested'; reviewerId: Id; at: string; reason: string }
@@ -161,8 +169,31 @@ export type ReportFinding = Finding & { educationModules: EducationModule[]; aut
 export type ReportPrimer = EducationModule & { authorities: Authority[] }
 export type CoverageRow = { ruleId: Id; name: string; requiredInputs: string[]; outcomes: RuleAudit[] }
 export type ParserFieldAvailability = { field: string; capability: 'supported' | 'planned'; states: Record<CanonicalValue<unknown>['state'], number> }
-export type ReportContent = { catalogVersion: string; rulesetVersion: string; parserVersion: string; sectionPrimers: ReportPrimer[]; coverage: CoverageRow[]; parserFields: ParserFieldAvailability[] }
-export type ConsumerReport = { id: Id; userId: Id; analysisId: Id; limitations: string[]; overview: Record<string, number>; findings: ReportFinding[]; actions: ActionItem[]; content?: ReportContent; generatedAt: string }
+export type ReportAccountCell = { label: string; value: string; source: Pick<SourceReference, 'kind' | 'locator'> }
+export type ReportAccountRow = { id: Id; bureau: Bureau; cells: ReportAccountCell[] }
+export type ReportScoreRow = { bureau: Bureau; score: number; scoreScale: string; source: Pick<SourceReference, 'kind' | 'locator'>; scaleSource: Pick<SourceReference, 'kind' | 'locator'> }
+export type ReportInquiryRow = { id: Id; bureau: Bureau; creditor: string; businessType?: string; date: string; source: Pick<SourceReference, 'kind' | 'locator'> }
+export type ReportContent = { catalogVersion: string; rulesetVersion: string; parserVersion: string; sectionPrimers: ReportPrimer[]; coverage: CoverageRow[]; parserFields: ParserFieldAvailability[]; accountRows?: ReportAccountRow[]; scoreRows?: ReportScoreRow[]; inquiryRows?: ReportInquiryRow[] }
+export type ReportPresentationProfile = {
+  revision: number
+  organizationName: string
+  preparedByLabel?: string
+  preparedByTitle?: string
+  logoUrl?: string
+  supportEmail?: string
+  websiteUrl?: string
+  supportPhone?: string
+  mailingAddress?: string
+  reportTitle?: string
+  reportSubtitle?: string
+  accent: 'gold' | 'charcoal' | 'sage'
+  printStyle: 'standard' | 'compact'
+  closingNote?: string
+  updatedAt?: string
+  updatedBy?: Id
+}
+export type ReportRecipient = { displayName: string; source: Pick<SourceReference, 'kind' | 'locator'>; confidence: number }
+export type ConsumerReport = { id: Id; userId: Id; analysisId: Id; limitations: string[]; overview: Record<string, number>; findings: ReportFinding[]; actions: ActionItem[]; content?: ReportContent; presentation: ReportPresentationProfile; recipient?: ReportRecipient; generatedAt: string }
 export type ExportArtifact = { id: Id; userId: Id; reportId: Id; formatVersion?: string; content: string; createdAt: string }
 export type DeletionJob = { id: Id; userId: Id; status: 'pending-provider' | 'complete'; deleted: string[]; delayed: string[]; completedAt?: string }
 /** Purpose-limited operational proof of completed deletion. It must never carry an account, user, session, report, or artifact identifier. */

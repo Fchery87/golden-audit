@@ -91,9 +91,13 @@ const balanceRule = (overrides: Partial<EvaluableRule> = {}): EvaluableRule => (
 test('identityiq-pdf: reconstructs account blocks with masked account, status, opened, updated, and balance', () => {
   const report = parseIdentityIqPdf(fixture())
   assert.equal(report.tradelines.length, 6)
-  const example = report.tradelines.filter(t => t.creditor === 'Example Bank') as ParserTradeline[]
+  assert.equal(report.scores.length, 0)
+  assert.equal(report.inquiries.length, 0)
+  const example = report.tradelines.filter(t => t.creditor.normalized === 'Example Bank') as ParserTradeline[]
   assert.equal(example.length, 3)
   const byBureau = new Map(example.map(t => [t.bureau, t]))
+  assert.equal(byBureau.get('transunion')?.creditor.normalized, 'Example Bank')
+  assert.match(byBureau.get('transunion')?.creditor.source.locator ?? '', /pdf:p1:y340:transunion:creditor/)
   assert.equal(byBureau.get('transunion')?.maskedAccount, '11112222****')
   assert.equal(byBureau.get('transunion')?.accountType.normalized, 'Revolving')
   assert.equal(byBureau.get('transunion')?.status.normalized, 'Open')
@@ -106,6 +110,48 @@ test('identityiq-pdf: reconstructs account blocks with masked account, status, o
   assert.equal(byBureau.get('experian')?.balance.normalized, 15000)
   assert.equal(byBureau.get('equifax')?.balance.normalized, 12500)
   assert.match(byBureau.get('transunion')?.balance.source.locator ?? '', /pdf:p1:y360:transunion:balance/)
+})
+
+test('identityiq-pdf: extracts source-linked reported scores and inquiries only from complete labeled layouts', () => {
+  const report = parseIdentityIqPdf([
+    word(1, 210, 100, 260, 112, 'Credit'), word(1, 265, 100, 315, 112, 'Score'), word(1, 500, 100, 550, 112, 'Back'), word(1, 555, 100, 575, 112, 'to'), word(1, 580, 100, 600, 112, 'Top'),
+    word(1, 225, 120, 275, 132, 'TransUnion'), word(1, 356, 120, 406, 132, 'Experian'), word(1, 488, 120, 538, 132, 'Equifax'),
+    word(1, 140, 134, 205, 146, 'Credit'), word(1, 210, 134, 250, 146, 'Score:'), word(1, 225, 134, 250, 146, '614'), word(1, 356, 134, 381, 146, '622'), word(1, 488, 134, 513, 146, '617'),
+    word(1, 140, 148, 195, 160, 'Score'), word(1, 200, 148, 240, 160, 'Scale:'), word(1, 225, 148, 280, 160, '300-850'), word(1, 356, 148, 411, 160, '300-850'), word(1, 488, 148, 543, 160, '300-850'),
+    word(2, 210, 100, 270, 112, 'Inquiries'), word(2, 500, 100, 550, 112, 'Back'), word(2, 555, 100, 575, 112, 'to'), word(2, 580, 100, 600, 112, 'Top'),
+    word(2, 45, 120, 100, 132, 'Creditor'), word(2, 105, 120, 140, 132, 'Name'), word(2, 250, 120, 285, 132, 'Type'), word(2, 290, 120, 350, 132, 'of'), word(2, 355, 120, 420, 132, 'Business'), word(2, 500, 120, 535, 132, 'Date'), word(2, 540, 120, 555, 132, 'of'), word(2, 560, 120, 610, 132, 'inquiry'), word(2, 650, 120, 690, 132, 'Credit'), word(2, 695, 120, 745, 132, 'Bureau'),
+    word(2, 45, 140, 150, 152, 'Example Lender'), word(2, 250, 140, 390, 152, 'Mortgage Reporters'), word(2, 500, 140, 570, 152, '03/24/2020'), word(2, 650, 140, 720, 152, 'Experian'),
+    word(2, 45, 154, 150, 166, 'Missing Date'), word(2, 250, 154, 390, 166, 'Finance'), word(2, 650, 154, 720, 166, 'Equifax'),
+    word(2, 45, 168, 150, 180, 'Invalid Date'), word(2, 250, 168, 390, 180, 'Finance'), word(2, 500, 168, 570, 180, '02/31/2025'), word(2, 650, 168, 720, 180, 'Equifax'),
+    word(2, 45, 182, 150, 194, 'TransUnion'), word(2, 250, 182, 390, 194, 'Finance'), word(2, 500, 182, 570, 194, '03/24/2020'), word(2, 650, 182, 720, 194, 'Experian'),
+  ])
+  assert.deepEqual(report.scores.map(score => [score.bureau, score.score.normalized]), [['transunion', 614], ['experian', 622], ['equifax', 617]])
+  assert.match(report.scores[0]?.score.source.locator ?? '', /pdf:p1:y134:transunion:score/)
+  assert.equal(report.inquiries.length, 2)
+  assert.deepEqual(report.inquiries[1] && [report.inquiries[1].creditor.normalized, report.inquiries[1].bureau], ['TransUnion', 'experian'])
+  assert.deepEqual(report.inquiries[0] && [report.inquiries[0].creditor.normalized, report.inquiries[0].businessType.normalized, report.inquiries[0].date.normalized, report.inquiries[0].bureau], ['Example Lender', 'Mortgage Reporters', '2020-03-24', 'experian'])
+  assert.match(report.inquiries[0]?.date.source.locator ?? '', /pdf:p2:y140:experian:inquiryDate/)
+
+  const duplicateScore = parseIdentityIqPdf([
+    word(1, 210, 100, 260, 112, 'Credit'), word(1, 265, 100, 315, 112, 'Score'), word(1, 500, 100, 550, 112, 'Back'), word(1, 555, 100, 575, 112, 'to'), word(1, 580, 100, 600, 112, 'Top'),
+    word(1, 225, 120, 275, 132, 'TransUnion'), word(1, 356, 120, 406, 132, 'Experian'), word(1, 488, 120, 538, 132, 'Equifax'),
+    word(1, 140, 134, 205, 146, 'Credit'), word(1, 210, 134, 250, 146, 'Score:'), word(1, 225, 134, 250, 146, '614'), word(1, 252, 134, 277, 146, '615'), word(1, 356, 134, 381, 146, '622'), word(1, 488, 134, 513, 146, '617'),
+    word(1, 140, 148, 195, 160, 'Score'), word(1, 200, 148, 240, 160, 'Scale:'), word(1, 225, 148, 280, 160, '300-850'), word(1, 356, 148, 411, 160, '300-850'), word(1, 488, 148, 543, 160, '300-850'),
+  ])
+  assert.deepEqual(duplicateScore.scores.map(score => score.bureau), ['experian', 'equifax'])
+})
+
+test('identityiq-pdf: does not turn a Last Reported structural label into a fallback tradeline', () => {
+  const words = [
+    word(1, 150, 100, 190, 112, 'Last'), word(1, 195, 100, 255, 112, 'Reported:'),
+    word(1, 225, 100, 280, 112, '2026-06-30'), word(1, 356, 100, 411, 112, '2026-06-29'), word(1, 488, 100, 543, 112, '2026-06-28'),
+    word(1, 130, 130, 210, 142, 'Fallback Bank'),
+    word(1, 225, 130, 280, 142, '$125.00'), word(1, 356, 130, 411, 142, '$150.00'),
+  ]
+  const report = parseIdentityIqPdf(words)
+  assert.equal(report.tradelines.length, 2)
+  assert.deepEqual(report.tradelines.map(line => line.creditor.normalized), ['Fallback Bank', 'Fallback Bank'])
+  assert.deepEqual(report.tradelines.map(line => line.balance.normalized), [12500, 15000])
 })
 
 test('identityiq-pdf: preserves explicitly dated payment cells and account-level Slice 2 values with provenance', () => {
@@ -133,10 +179,25 @@ test('identityiq-pdf: preserves explicitly dated payment cells and account-level
   assert.equal(transunion?.specialCommentCodes[0]?.normalized, 'AW')
   assert.match(transunion?.paymentHistory[0]?.source.locator ?? '', /paymentHistory:2026-01/)
 })
+test('identityiq-pdf: keeps creditor vocabulary intact and does not inherit a missing next creditor', () => {
+  const words = [
+    word(1, 130, 100, 240, 112, 'Credit One Bank'),
+    word(1, 150, 120, 190, 132, 'Account'), word(1, 195, 120, 215, 132, '#:'),
+    word(1, 225, 120, 270, 132, '44445555****'), word(1, 356, 120, 401, 132, '44445555****'),
+    word(1, 160, 134, 210, 146, 'Balance:'), word(1, 225, 134, 260, 146, '$100.00'), word(1, 356, 134, 391, 146, '$100.00'),
+    word(1, 150, 148, 190, 160, 'Account'), word(1, 195, 148, 215, 160, '#:'),
+    word(1, 225, 148, 270, 160, '99990000****'), word(1, 356, 148, 401, 160, '99990000****'),
+    word(1, 160, 162, 210, 174, 'Balance:'), word(1, 225, 162, 260, 174, '$200.00'), word(1, 356, 162, 391, 174, '$200.00'),
+  ]
+  const report = parseIdentityIqPdf(words)
+  assert.equal(report.tradelines.filter(line => line.creditor.normalized === 'Credit One Bank').length, 2)
+  assert.equal(report.tradelines.filter(line => line.maskedAccount === '99990000****').length, 0)
+})
+
 test('identityiq-pdf: end-to-end → deterministic core flags the differing bureau, not the agreeing one', () => {
   const report = parseIdentityIqPdf(fixture())
   const run = (creditor: string) => {
-    const tl = report.tradelines.filter(t => t.creditor === creditor).map(t => ({ ...t, bureau: t.bureau })) as unknown as EvaluableTradeline[]
+    const tl = report.tradelines.filter(t => t.creditor.normalized === creditor).map(t => ({ ...t, bureau: t.bureau })) as unknown as EvaluableTradeline[]
     return evaluateAnalysis({
       rules: [balanceRule()], tradelines: tl,
       confirmedMatches: [{ tradelineIds: tl.map(t => t.id) }],
@@ -169,7 +230,7 @@ test('identityiq-pdf: dynamic column detection — maps non-standard (2023-style
     word(1, 630, 388, 670, 400, '$333.00'),
   ]
   const report = parseIdentityIqPdf(dynamicFixture)
-  const byBureau = new Map(report.tradelines.filter(t => t.creditor === 'Test Creditor').map(t => [t.bureau, t]))
+  const byBureau = new Map(report.tradelines.filter(t => t.creditor.normalized === 'Test Creditor').map(t => [t.bureau, t]))
   assert.equal(byBureau.get('transunion')?.balance.normalized, 11100)
   assert.equal(byBureau.get('experian')?.balance.normalized, 22200)
   assert.equal(byBureau.get('equifax')?.balance.normalized, 33300)
@@ -189,8 +250,11 @@ test('identityiq-pdf: real-file smoke across all samples (structure only; overfi
     const html = execSync(`pdftotext -bbox "${p}" -`, { encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 })
     const report = parseIdentityIqPdfBbox(html)
     const bureaus = new Set(report.tradelines.map(t => t.bureau))
-    const ok = report.tradelines.length > 0 && bureaus.has('transunion') && bureaus.has('experian') && bureaus.has('equifax')
-    if (!ok) failed.push(`${p.split('/').pop()} (tradelines=${report.tradelines.length}, bureaus=[${[...bureaus].join(',')}])`)
+    const scoreBureaus = new Set(report.scores.map(score => score.bureau))
+    const invalidScore = report.scores.some(score => score.score.normalized === null || !score.score.source.locator || score.score.normalized < 300 || score.score.normalized > 850)
+    const invalidInquiry = report.inquiries.some(inquiry => !inquiry.creditor.source.locator || !inquiry.date.source.locator || inquiry.date.normalized === null)
+    const ok = report.tradelines.length > 0 && bureaus.has('transunion') && bureaus.has('experian') && bureaus.has('equifax') && scoreBureaus.size === 3 && !invalidScore && !invalidInquiry
+    if (!ok) failed.push(`${p.split('/').pop()} (tradelines=${report.tradelines.length}, scores=${report.scores.length}, inquiries=${report.inquiries.length}, bureaus=[${[...bureaus].join(',')}])`)
   }
   if (missing.length === REAL_PDFS.length) { }
   assert.equal(failed.length, 0, `overfitting guard: samples that failed to yield all 3 bureaus: ${failed.join('; ') || '(none)'}`)

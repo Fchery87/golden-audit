@@ -47,6 +47,10 @@ Each parsed tradeline maps to `ParserTradeline` (creditor, maskedAccount, balanc
 - **No re-aging conclusion:** movement requires reliably matched account identity across separately dated reports. This one-report parser and analysis model do not make that comparison, so no re-aging or DOFD Finding is published in this slice.
 
 
+## Fallback structural-row guard
+
+The balance-row fallback exists only for older layouts missing account-block balance coverage. It rejects structural field labels such as `Last Reported` before it evaluates positional values, so dates in an account detail label cannot become an account-like fallback row. Account-block parsing remains the sole source of `updated` values. This guard is covered by a synthetic positional regression; controlled validation against authorized local reports remains required before release.
+
 ## DECISIVE FINDING — IdentityIQ saved HTML is a template shell (no per-account data)
 
 Closer inspection (all 4 HTML samples, 2020–2025) overturned the earlier "HTML-primary" conclusion:
