@@ -295,6 +295,53 @@ test('identityiq-pdf: an account that reports no balance is kept with the balanc
   }
 })
 
+test('identityiq-pdf: an account only one bureau reports is still an account', () => {
+  // This required two bureau columns, which discarded 9 of the 37 accounts across the authorized
+  // samples — and an account a single bureau carries is the incomplete-reporting signal a reader
+  // most wants surfaced, not the one to throw away.
+  const report = parseIdentityIqPdf([
+    word(1, 130, 340, 210, 352, 'Solo Bureau Bank'),
+    word(1, 150, 360, 190, 372, 'Account'), word(1, 195, 360, 215, 372, '#:'),
+    word(1, 225, 360, 270, 372, '12123434****'),
+    word(1, 160, 374, 210, 386, 'Balance:'), word(1, 225, 374, 260, 386, '$50.00'),
+  ])
+  assert.equal(report.tradelines.length, 1)
+  assert.equal(report.tradelines[0]?.bureau, 'transunion')
+  assert.equal(report.tradelines[0]?.maskedAccount, '12123434****')
+  assert.equal(report.tradelines[0]?.balance.normalized, 5000)
+})
+
+test('identityiq-pdf: the payment-history grid is read from its own Month and Year headers', () => {
+  // The grid is a full-width table that does not use the bureau columns: a Month row, a Year row,
+  // and one row per bureau, every cell sharing the header cells' x-centre. Each status cell is
+  // therefore explicitly dated by the document. The adapter used to demand a per-token `YYYY-MM:`
+  // prefix that this format never uses, so payment history came back empty on all four samples.
+  const cell = (x: number, y: number, text: string) => word(1, x - 8, y, x + 8, y + 12, text)
+  const report = parseIdentityIqPdf([
+    word(1, 130, 100, 210, 112, 'Grid Bank'),
+    word(1, 150, 120, 190, 132, 'Account'), word(1, 195, 120, 215, 132, '#:'),
+    word(1, 225, 120, 270, 132, '55556666****'), word(1, 356, 120, 401, 132, '55556666****'), word(1, 488, 120, 533, 132, '55556666****'),
+    word(1, 160, 134, 210, 146, 'Balance:'),
+    word(1, 225, 134, 260, 146, '$10.00'), word(1, 356, 134, 391, 146, '$10.00'), word(1, 488, 134, 523, 146, '$10.00'),
+    // One template appends a Legend link to the heading row; it must not stop the match.
+    word(1, 60, 160, 140, 172, 'Two-Year payment history'), word(1, 520, 160, 560, 172, 'Legend'),
+    word(1, 60, 176, 100, 188, 'Month'), cell(120, 176, 'Apr'), cell(140, 176, 'Mar'), cell(160, 176, 'Feb'), cell(180, 176, 'Jan'),
+    word(1, 60, 192, 100, 204, 'Year'), cell(120, 192, '25'), cell(140, 192, '25'), cell(160, 192, '24'), cell(180, 192, '24'),
+    word(1, 60, 208, 110, 220, 'TransUnion'), cell(120, 208, 'OK'), cell(140, 208, '30'), cell(160, 208, '60'), cell(180, 208, 'OK'),
+    word(1, 60, 224, 105, 236, 'Experian'), cell(120, 224, 'OK'), cell(140, 224, 'OK'), cell(160, 224, 'OK'), cell(180, 224, 'OK'),
+    // A partial bureau row, plus a cell sitting under no column at all.
+    word(1, 60, 240, 100, 252, 'Equifax'), cell(140, 240, 'OK'), cell(160, 240, 'OK'), cell(300, 240, '90'),
+  ])
+  const byBureau = new Map(report.tradelines.map(line => [line.bureau, line]))
+  const cells = (bureau: string) => (byBureau.get(bureau as never)?.paymentHistory ?? []).map(c => [c.yearMonth, c.normalized])
+
+  // The year comes from the column the cell sits under, not from the row's first year.
+  assert.deepEqual(cells('transunion'), [['2025-04', 'OK'], ['2025-03', '30'], ['2024-02', '60'], ['2024-01', 'OK']])
+  assert.deepEqual(cells('experian'), [['2025-04', 'OK'], ['2025-03', 'OK'], ['2024-02', 'OK'], ['2024-01', 'OK']])
+  assert.deepEqual(cells('equifax'), [['2025-03', 'OK'], ['2024-02', 'OK']], 'a cell under no stated month is dropped, never positioned')
+  assert.match(byBureau.get('transunion')?.paymentHistory[1]?.source.locator ?? '', /paymentHistory:2025-03/)
+})
+
 test('identityiq-pdf: summary tallies and payment-grid headers are not accounts', () => {
   // Every one of these rows became a tradeline on the authorized samples — 28 of one report's 33.
   // A bare integer is not an amount: masked account numbers, term counts, the payment-history year

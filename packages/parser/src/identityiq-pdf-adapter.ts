@@ -154,11 +154,21 @@ function isSectionAnchor(row: Row): boolean {
   return /back to top/i.test(row.words.map(word => word.text).join(' '))
 }
 
+/**
+ * An `Account #:` label carrying a value in at least one bureau column.
+ *
+ * This required two columns, which discarded every account only one bureau reports — 9 of the 37
+ * accounts across the authorized samples. That is backwards for an audit: an account a single
+ * bureau carries is exactly the incomplete-reporting and mixed-file signal a reader wants surfaced,
+ * and dropping it also removed it from the identity and duplicate checks. The two-column rule was
+ * standing in for structural rejection of header and summary rows; the colon-label and currency
+ * guards on the fallback now do that job directly.
+ */
 function isAccountStart(row: Row, layout: Layout): boolean {
   if (!/^account\s+#:?$/i.test(labelText(row, layout))) return false
   const buckets = bureauWordBuckets(row, layout.bureauOf)
   return (['transunion', 'experian', 'equifax'] as const)
-    .filter(bureau => joined(buckets[bureau]).length > 0).length >= 2
+    .some(bureau => joined(buckets[bureau]).length > 0)
 }
 
 function normalizeFieldText(field: FieldName, text: string): string {
@@ -214,6 +224,102 @@ function parseRepeatedValues(field: RepeatedFieldName, bureau: Bureau, text: str
   }))
 }
 
+const GRID_MONTHS: Readonly<Record<string, string>> = {
+  jan: '01', feb: '02', mar: '03', apr: '04', may: '05', jun: '06',
+  jul: '07', aug: '08', sep: '09', oct: '10', nov: '11', dec: '12',
+}
+
+/**
+ * `Two-Year payment history` — the grid's own heading, matched on the start of the row rather than
+ * the whole of it: one template appends a `Legend` link to the same row. Matched on row text so it
+ * does not depend on where the label/value boundary falls.
+ */
+function isPaymentGridAnchor(row: Row): boolean {
+  return /^two[-\s]year\s+payment\s+history\b/i.test(row.words.map(word => word.text).join(' ').replace(/\s+/g, ' ').trim())
+}
+
+/**
+ * Half the grid's own column pitch, measured from its month header.
+ *
+ * The pitch differs by template — ≈27pt in one authorized sample, ≈19pt in another — so a fixed
+ * tolerance is either too tight to match a cell or wide enough to pull it under its neighbour's
+ * month. Deriving it from the header keeps a cell matched to its own column in both.
+ */
+function gridColumnTolerance(columns: ReadonlyArray<{ x: number }>): number {
+  const xs = columns.map(column => column.x).sort((a, b) => a - b)
+  const gaps = xs.slice(1).map((x, index) => x - (xs[index] ?? x)).filter(gap => gap > 0).sort((a, b) => a - b)
+  const median = gaps[Math.floor(gaps.length / 2)]
+  return median === undefined ? 0 : median / 2
+}
+
+function nearestColumn<T extends { x: number }>(columns: T[], x: number, tolerance: number): T | undefined {
+  let best: T | undefined
+  for (const column of columns) if (!best || Math.abs(column.x - x) < Math.abs(best.x - x)) best = column
+  return best && Math.abs(best.x - x) <= tolerance ? best : undefined
+}
+
+/**
+ * The IdentityIQ payment-history grid.
+ *
+ * The grid is a full-page-width table that does NOT use the bureau columns: a `Month` header row, a
+ * `Year` header row, and one row per bureau, every cell sharing the header cells' x-centre. So each
+ * status cell carries an explicit month and year — stated by the document, read positionally, not
+ * inferred from order or position in a sequence. That is why this is admissible under the same rule
+ * that rejects unkeyed payment text: the key exists, it is simply in the header rows rather than in
+ * the cell. The adapter previously required a per-token `YYYY-MM:` prefix, which this format never
+ * uses, so payment history came back empty on all four authorized samples.
+ *
+ * A cell that does not sit under a stated month AND a stated year is dropped; a month that ends up
+ * with two cells is ambiguous and neither is published.
+ */
+function parsePaymentGrid(rows: Row[], anchorIndex: number): Map<Bureau, ParserPaymentHistoryCell[]> {
+  const result = new Map<Bureau, ParserPaymentHistoryCell[]>()
+  const section = rows.slice(anchorIndex + 1, anchorIndex + 7)
+  const headed = (row: Row, name: RegExp) => name.test(row.words[0]?.text.trim() ?? '')
+  const monthRow = section.find(row => headed(row, /^month$/i))
+  const yearRow = section.find(row => headed(row, /^year$/i))
+  if (!monthRow || !yearRow) return result
+
+  const months = monthRow.words.slice(1).flatMap(word => {
+    const month = GRID_MONTHS[word.text.trim().toLowerCase()]
+    return month ? [{ x: xCenter(word), month }] : []
+  })
+  // Two-digit years in a 24-month window; a four-digit year is taken as stated.
+  const years = yearRow.words.slice(1).flatMap(word => {
+    const text = word.text.trim()
+    if (/^\d{4}$/.test(text)) return [{ x: xCenter(word), year: text }]
+    return /^\d{2}$/.test(text) ? [{ x: xCenter(word), year: `20${text}` }] : []
+  })
+  if (months.length === 0 || years.length === 0) return result
+  const tolerance = gridColumnTolerance(months)
+  if (tolerance === 0) return result
+
+  for (const row of section) {
+    const head = row.words[0]?.text.trim().toLowerCase()
+    const bureau = (['transunion', 'experian', 'equifax'] as const).find(name => name === head)
+    if (!bureau) continue
+    const cells: ParserPaymentHistoryCell[] = []
+    for (const word of row.words.slice(1)) {
+      const status = word.text.trim()
+      if (!status || status === '-') continue
+      const x = xCenter(word)
+      const month = nearestColumn(months, x, tolerance)
+      const year = nearestColumn(years, x, tolerance)
+      if (!month || !year) continue
+      const yearMonth = `${year.year}-${month.month}`
+      cells.push({
+        ...rowValue<string>(bureau, 'paymentHistory', status, status, row.page, row.yMin, FIELD_CONFIDENCE, 'known'),
+        yearMonth,
+        source: { kind: 'element', locator: `pdf:p${row.page}:y${Math.round(row.yMin)}:${bureau}:paymentHistory:${yearMonth}`, snippet: status },
+      })
+    }
+    const counts = new Map<string, number>()
+    for (const cell of cells) counts.set(cell.yearMonth, (counts.get(cell.yearMonth) ?? 0) + 1)
+    result.set(bureau, cells.filter(cell => counts.get(cell.yearMonth) === 1))
+  }
+  return result
+}
+
 function unknownDateOfFirstDelinquency(bureau: Bureau, page: number, yMin: number): ParserValue<string> {
   return rowValue<string>(bureau, 'dateOfFirstDelinquency', null, '', page, yMin, 0, 'unknown')
 }
@@ -239,6 +345,7 @@ function buildTradelinesFromAccountBlocks(words: Word[]): ParserTradeline[] {
 
     const fieldRows = new Map<FieldName, Row>()
     const repeatedRows = new Map<RepeatedFieldName, Row[]>()
+    let gridAnchor: number | undefined
     fieldRows.set('maskedAccount', row)
     // An account block runs until the next account or the end of the section — not until the end of
     // the page. IdentityIQ paginates mid-block: the rows continuing an account reappear at the top
@@ -248,6 +355,7 @@ function buildTradelinesFromAccountBlocks(words: Word[]): ParserTradeline[] {
       const candidate = rows[cursor]
       if (!candidate) break
       if (isAccountStart(candidate, layout) || isSectionAnchor(candidate)) break
+      if (isPaymentGridAnchor(candidate)) { gridAnchor = cursor; continue }
       const label = labelText(candidate, layout)
       if (/^account\s+type:?$/i.test(label)) fieldRows.set('accountType', candidate)
       else if (/^account\s+status:?$/i.test(label)) fieldRows.set('status', candidate)
@@ -263,6 +371,7 @@ function buildTradelinesFromAccountBlocks(words: Word[]): ParserTradeline[] {
       else if (/^special\s+comment\s+codes?:?$/i.test(label)) repeatedRows.set('specialCommentCodes', [...(repeatedRows.get('specialCommentCodes') ?? []), candidate])
     }
 
+    const gridCells = gridAnchor === undefined ? new Map<Bureau, ParserPaymentHistoryCell[]>() : parsePaymentGrid(rows, gridAnchor)
     const fieldMaps = new Map<FieldName, BureauValueMap>()
     for (const [field, sourceRow] of fieldRows) fieldMaps.set(field, bureauWordBuckets(sourceRow, layout.bureauOf))
     const presentBureaus = new Set<Bureau>()
@@ -311,7 +420,7 @@ function buildTradelinesFromAccountBlocks(words: Word[]): ParserTradeline[] {
         opened: parseField('opened', bureau, openedText, row.page, row.yMin) as ParserValue<string>,
         updated: parseField('updated', bureau, updatedText, row.page, row.yMin) as ParserValue<string>,
         dateOfFirstDelinquency: dofdText ? parseField('dateOfFirstDelinquency', bureau, dofdText, dofdRow?.page ?? row.page, dofdRow?.yMin ?? row.yMin) as ParserValue<string> : unknownDateOfFirstDelinquency(bureau, row.page, row.yMin),
-        paymentHistory: parsePaymentHistoryRows(bureau, paymentHistoryRows, layout),
+        paymentHistory: [...parsePaymentHistoryRows(bureau, paymentHistoryRows, layout), ...(gridCells.get(bureau) ?? [])],
         remarks,
         specialCommentCodes,
       })

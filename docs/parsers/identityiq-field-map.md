@@ -97,6 +97,44 @@ The boundary is `min(detected column x) - 60`, the same rule the Personal Inform
 used. When no bureau header row is found (synthetic fixtures, unknown templates) there is nothing to
 derive it from, so the legacy fixed cut is retained rather than guessed at.
 
+## Single-bureau accounts (revised 2026-08-02)
+
+**An account is accepted with values from as few as one bureau column**, not two. Requiring two
+discarded 9 of 37 accounts across the authorized samples — and an account only one bureau carries is
+itself the incomplete-reporting/mixed-file signal an audit exists to surface, so dropping it removed
+it from every downstream check (identity, duplicate, cross-bureau) as well as its own. The two-column
+rule had been standing in for rejection of header/summary rows; the colon-label and currency guards
+on the fallback path (below) do that job directly, so the account-count floor is no longer needed for
+it.
+
+## Payment-history grid (added 2026-08-02)
+
+**The Two-Year payment history grid is now read.** It previously returned empty on all four
+authorized samples: the adapter required a per-token `YYYY-MM:status` key, a format this grid never
+uses. The grid instead states its key in two header rows — `Month` and `Year` — with one row per
+bureau below them, every cell (header and status alike) sharing its column's x-centre. Each status
+cell is therefore explicitly dated by the document; reading it is positional extraction against a
+stated key, the same standard already applied to the account blocks and to Personal Information, not
+an inferred grid.
+
+Two things vary by template and are derived from the document rather than assumed:
+- **The heading row's exact text.** One sample appends a `Legend` link to the same row as
+  `Two-Year payment history`; matched on the row's start, not its entirety.
+- **The column pitch.** ≈27pt in one sample, ≈19pt in another. The match tolerance is half the
+  median gap between the month header's own x-centres, so a status cell is matched to its own column
+  in both without being pulled under a neighbour's month in the tighter template.
+
+A cell that lands under no stated month or year (or under two, ambiguously) is dropped rather than
+positioned by inference.
+
+**`cross-bureau-payment-history-difference`** (`packages/analysis-core/src/engine.ts`) is the first
+rule to consume it: months at least two bureaus report are compared per month, a month only one
+bureau reports is treated as an absence rather than a disagreement (bureaus routinely hold different
+lengths of history for the same account), and one finding is emitted per account citing every
+differing month, not one per month. Measured against the four authorized samples: 9 findings total,
+citing 2–46 evidence entries each, all traceable to genuine cross-bureau divergence in the grid — the
+first payment-history-based finding this system has produced from a real report.
+
 ## Account block extent (revised 2026-08-02)
 
 **A block runs to the next `Account #:` row or to the end of the section, not to the end of the

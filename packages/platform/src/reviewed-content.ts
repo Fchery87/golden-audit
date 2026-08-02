@@ -129,6 +129,7 @@ export const reviewedCaliforniaCatalog = {
     ['cross-bureau-status-difference', ['status'], 'verification-recommended', ['Account status can update on different dates'], 'module-report-differences'],
     ['cross-bureau-date-opened-difference', ['opened'], 'verification-recommended', ['Verify the date with creditor records'], 'module-report-differences'],
     ['cross-bureau-last-reported-difference', ['updated'], 'observed-fact', ['Different reporting cycles are common'], 'module-report-differences'],
+    ['cross-bureau-payment-history-difference', ['paymentHistory'], 'verification-recommended', ['Only months that two or more companies report are compared', 'A month one company does not report is treated as absent, not as a difference'], 'module-report-differences'],
     ['closed-or-paid-with-balance', ['status', 'balance'], 'verification-recommended', ['Status and balance can be reported on different cycles'], 'module-status-and-balance'],
     ['past-due-exceeds-balance', ['pastDue', 'balance'], 'verification-recommended', ['Fields can be reported on different cycles'], 'module-status-and-balance'],
     ['revolving-without-credit-limit', ['accountType', 'creditLimit'], 'observed-fact', ['Some furnishers report high credit rather than a current limit'], 'module-report-differences'],

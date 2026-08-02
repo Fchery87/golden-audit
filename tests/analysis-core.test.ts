@@ -172,3 +172,70 @@ test('analysis-core: engine imports nothing from platform/domain (ingest-agnosti
     assert.doesNotMatch(src, /from ['"]\.\.\/\.\.\/(platform|domain)/, `${f}.ts must not depend on platform/domain`)
   }
 })
+
+/**
+ * Payment-history divergence is the first check over a keyed series rather than a scalar, so the
+ * cases that matter are the ones a scalar comparison never had to answer: what a month only one
+ * bureau reports means, and what happens when the two grids overlap only partially.
+ */
+const paymentRule = (overrides: Partial<EvaluableRule> = {}): EvaluableRule => rule({
+  id: 'rule-ph', name: 'cross-bureau-payment-history-difference',
+  limitations: ['Only months that two or more companies report are compared'], ...overrides,
+})
+
+const withHistory = (id: string, bureau: string, cells: Array<[string, string]>, confidence = 1): EvaluableTradeline => ({
+  id, bureau,
+  balance: { normalized: 100, confidence: 1, source: { kind: 'page', locator: `${id}:balance`, snippet: '$1.00' } },
+  paymentHistory: cells.map(([yearMonth, status]) => ({
+    yearMonth, normalized: status, confidence,
+    source: { kind: 'element', locator: `${id}:paymentHistory:${yearMonth}`, snippet: status },
+  })),
+})
+
+const runHistory = (tradelines: EvaluableTradeline[], overrides: Partial<EvaluableRule> = {}) =>
+  evaluateAnalysis({ rules: [paymentRule(overrides)], tradelines, confirmedMatches: [{ tradelineIds: tradelines.map(t => t.id) }], versions })
+
+test('analysis-core: payment-history comparison reports the months that differ, once per account', () => {
+  const analysis = runHistory([
+    withHistory('tu', 'transunion', [['2025-04', 'OK'], ['2025-03', '30'], ['2025-02', '60'], ['2025-01', 'OK']]),
+    withHistory('ex', 'experian', [['2025-04', 'OK'], ['2025-03', 'OK'], ['2025-02', 'OK'], ['2025-01', 'OK']]),
+  ])
+  assert.equal(analysis.findings.length, 1, 'one finding per account, not one per differing month')
+  const finding = analysis.findings[0]!
+  assert.match(finding.title, /2 months \(2025-02 to 2025-03\)/)
+  assert.equal(finding.evidence.length, 4, 'both bureaus are cited for each differing month')
+  assert.deepEqual(finding.evidence.map(e => e.field).sort(), ['paymentHistory:2025-02', 'paymentHistory:2025-02', 'paymentHistory:2025-03', 'paymentHistory:2025-03'])
+  assert.ok(finding.alternativeExplanations.length > 0, 'a difference is never presented as a conclusion')
+  assert.doesNotMatch(`${finding.title} ${finding.suggestedAction}`, /violation|illegal|unlawful|fraud/i)
+})
+
+test('analysis-core: a month only one bureau reports is an absence, not a difference', () => {
+  // Bureaus routinely hold different lengths of history for the same account. Reading the shorter
+  // grid's missing months as disagreement would put a finding on nearly every account.
+  const analysis = runHistory([
+    withHistory('tu', 'transunion', [['2025-04', 'OK'], ['2025-03', 'OK'], ['2025-02', 'OK']]),
+    withHistory('ex', 'experian', [['2025-04', 'OK']]),
+  ])
+  assert.equal(analysis.findings.length, 0)
+  assert.equal(analysis.audit[0]?.outcome, 'skipped')
+  assert.match(analysis.audit[0]?.reason ?? '', /agree across 1 month/)
+})
+
+test('analysis-core: payment history with no overlapping months suppresses with a stated reason', () => {
+  const analysis = runHistory([
+    withHistory('tu', 'transunion', [['2025-04', 'OK']]),
+    withHistory('ex', 'experian', [['2024-01', '30']]),
+  ])
+  assert.equal(analysis.findings.length, 0)
+  assert.equal(analysis.audit[0]?.outcome, 'suppressed')
+  assert.match(analysis.audit[0]?.reason ?? '', /No month is reported with a usable payment status/)
+})
+
+test('analysis-core: low-confidence payment cells are excluded rather than compared', () => {
+  const analysis = runHistory([
+    withHistory('tu', 'transunion', [['2025-04', '60']], 0.4),
+    withHistory('ex', 'experian', [['2025-04', 'OK']]),
+  ])
+  assert.equal(analysis.findings.length, 0, 'a misread cell must not manufacture a difference')
+  assert.equal(analysis.audit[0]?.outcome, 'suppressed')
+})

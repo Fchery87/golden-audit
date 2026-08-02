@@ -7,7 +7,7 @@ export const reviewedContentApproval = {
   // Filled by the human-attributed approval commit. It is the canonical SHA-256
   // of the content catalog excluding this approval record. Regenerate with
   // `npx tsx scripts/print-catalog-digest.ts` after any edit to reviewed-content.ts.
-  catalogSha256: 'd847831cbe5157b93257ff2432d38f1b0999afad306ee05a28313fef6ae5a698',
+  catalogSha256: '21ef0637471c42efe2f501fd04fb49c1be637a6767a5811f9d41256292ba25c9',
   // PENDING APPROVER ACTION: this still points at the commit that approved the previous catalog.
   // `npm run verify:content` runs `git diff --quiet <reviewedCommit> -- reviewed-content.ts` and
   // will therefore fail until the named reviewer commits the new identity-check content and

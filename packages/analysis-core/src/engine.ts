@@ -46,6 +46,8 @@ export type EvaluableTradeline = {
   status?: { normalized: string | null; confidence: number; source: SourceReference }
   opened?: { normalized: string | null; confidence: number; source: SourceReference }
   updated?: { normalized: string | null; confidence: number; source: SourceReference }
+  /** Month-keyed payment status cells. Each carries the month the document itself stated. */
+  paymentHistory?: Array<{ yearMonth: string; normalized: string | null; confidence: number; source: SourceReference }>
 }
 
 export type MatchRef = { tradelineIds: string[] }
@@ -461,6 +463,79 @@ const crossBureauLastReportedDifference: RuleEvaluator = ({ rule, tradelinesById
   return { audits, findings }
 }
 registerRuleEvaluator('cross-bureau-last-reported-difference', crossBureauLastReportedDifference)
+
+/**
+ * Cross-bureau payment-history divergence.
+ *
+ * Unlike the scalar comparisons above, this compares a month-keyed series, so the comparison runs
+ * per month and only on months at least two bureaus actually state. A month one bureau omits is an
+ * absence, not a disagreement — bureaus commonly hold different lengths of history for the same
+ * account — so omitted months are excluded from the comparison rather than read as a difference.
+ *
+ * One finding per account, citing the months that differ, rather than one per month: a 24-month
+ * grid that diverges for half a year would otherwise bury the account it belongs to.
+ */
+const crossBureauPaymentHistoryDifference: RuleEvaluator = ({ rule, tradelinesById, confirmedMatches }) => {
+  const audits: RuleAudit[] = []
+  const findings: Omit<Finding, 'id'>[] = []
+  for (const match of confirmedMatches) {
+    const lines = match.tradelineIds.map(id => tradelinesById.get(id)).filter((line): line is EvaluableTradeline => line !== undefined)
+    const distinct = distinctBureauLines(lines)
+    if (distinct.length < 2) {
+      audits.push(skip(rule.id, 'Need at least two distinct bureaus for comparison'))
+      continue
+    }
+
+    // Only cells the parser read confidently take part; a low-confidence cell is not evidence of
+    // anything, and letting it through would manufacture a difference out of a misread column.
+    const byMonth = new Map<string, Array<{ line: EvaluableTradeline; cell: { yearMonth: string; normalized: string | null; confidence: number; source: SourceReference } }>>()
+    for (const line of distinct) {
+      for (const cell of line.paymentHistory ?? []) {
+        if (cell.normalized === null || cell.confidence < rule.minimumConfidence) continue
+        byMonth.set(cell.yearMonth, [...(byMonth.get(cell.yearMonth) ?? []), { line, cell }])
+      }
+    }
+
+    const comparable = [...byMonth.entries()].filter(([, entries]) => entries.length >= 2)
+    if (comparable.length === 0) {
+      audits.push(suppress(rule.id, 'No month is reported with a usable payment status by two or more bureaus'))
+      continue
+    }
+
+    const differing = comparable.filter(([, entries]) => new Set(entries.map(entry => entry.cell.normalized)).size > 1)
+    if (differing.length === 0) {
+      audits.push(skip(rule.id, `Comparable payment statuses agree across ${comparable.length} month${comparable.length === 1 ? '' : 's'}`))
+      continue
+    }
+
+    const months = differing.map(([yearMonth]) => yearMonth).sort()
+    const evidence: Evidence[] = differing.flatMap(([yearMonth, entries]) => entries.map(entry => ({
+      tradelineId: entry.line.id,
+      field: `paymentHistory:${yearMonth}`,
+      value: entry.cell.normalized ?? '',
+      source: entry.cell.source,
+    })))
+    findings.push({
+      classification: rule.classification,
+      title: `Bureau payment histories differ for ${months.length} month${months.length === 1 ? '' : 's'} (${months[0]}${months.length > 1 ? ` to ${months[months.length - 1]}` : ''})`,
+      severity: 'medium',
+      confidence: Math.min(...differing.flatMap(([, entries]) => entries.map(entry => entry.cell.confidence))),
+      evidence,
+      limitations: rule.limitations,
+      alternativeExplanations: [
+        'Bureaus receive payment updates on different cycles, so one month can differ while the account is reported correctly',
+        'A furnisher may have begun reporting to one bureau later than to another',
+      ],
+      verificationDocuments: ['Statements covering the months listed', 'Payment records for this account'],
+      authorityIds: rule.authorityIds,
+      educationModuleIds: rule.educationModuleIds,
+      suggestedAction: 'Compare your own payment records for the months listed against what each bureau shows for this account',
+    })
+    audits.push(trigger(rule.id, `Comparable payment statuses differ in ${differing.length} of ${comparable.length} compared months`))
+  }
+  return { audits, findings }
+}
+registerRuleEvaluator('cross-bureau-payment-history-difference', crossBureauPaymentHistoryDifference)
 
 const duplicateTradelineWithinBureau: RuleEvaluator = ({ rule, tradelinesById, confirmedMatches }) => {
   const audits: RuleAudit[] = []
