@@ -28,13 +28,32 @@ We may collect the following categories of information:
 - authorization acceptance version and timestamp
 - pilot / jurisdiction eligibility confirmations
 
-### C. Consumer-provided report data
+### C. Identity details the consumer enters (new — requires privacy review)
+- full legal name
+- date of birth
+- **the last four digits of a Social Security number only** — the full number is never requested, transmitted, or stored, and the application rejects any entry longer than four digits rather than truncating it
+- current address, and any previous addresses the consumer chooses to add
+- the consumer's accuracy declaration (version and timestamp)
+
+*Why it is collected:* the report's own personal-information section can only be checked against
+something. These details are that reference set; without them the identity checks (name, date of
+birth, SSN fragment, and address variance across bureaus — the standard mixed-file indicators)
+cannot run at all. They are used only for that comparison and are shown back only to the consumer.
+
+*Storage:* a dedicated `consumer_identities` row, deleted by an explicit statement in the deletion
+path rather than as a side effect of deleting the account record.
+
+**Open for review:** whether the date of birth and SSN fragment require a sensitive-personal-
+information notice or a separate notice-at-collection under the CPRA, and whether the accuracy
+declaration wording needs counsel sign-off. Nothing here is approved by its presence in this draft.
+
+### D. Consumer-provided report data
 - the credit report file the consumer uploads
 - normalized report data extracted from that report
 - provenance / source references for extracted values
 - consumer corrections, notes, and match confirmations
 
-### D. Analysis and product-use information
+### E. Analysis and product-use information
 - findings and educational output generated from the uploaded report
 - export artifacts the consumer requests
 - consumer action-tracking information in the report workspace

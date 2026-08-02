@@ -116,7 +116,7 @@ try {
     pagesFunctions = { status: 'ok', url: base }
   }
 
-  console.log(JSON.stringify({ status: 'ok', services: health, pagesFunctions, database: { status: 'ok', migrationVersion: '004_consumer_persistence' } }))
+  console.log(JSON.stringify({ status: 'ok', services: health, pagesFunctions, database: { status: 'ok', migrationVersion: '005_attested_identity' } }))
 } finally {
   for (const child of children) child.kill()
   await Promise.all(children.map(child => once(child, 'exit').catch(() => undefined)))

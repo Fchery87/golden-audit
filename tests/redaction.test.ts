@@ -2,6 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { redactReportText, containsUnredactedIdentifier } from '../packages/redaction/src/index.js'
 import { CreditAnalysisPlatform } from '../packages/platform/src/index.js'
+import { attestTestIdentity } from './support-identity.js'
 
 const consent = { version: '2026-01', adultUSConsumer: true, authorizedReportUse: true, educationalLimitations: true, sensitiveDataHandling: true, residence: 'US-CA', analysisJurisdiction: 'US-CA' } as const
 
@@ -45,6 +46,7 @@ test('trust boundary: an SSN injected into the upload cannot reach the parsed re
   const inviteCode = await platform.issueInvite()
   const { sessionId } = await platform.register({ email: 'redact@example.com', password: 'correct horse battery staple', inviteCode })
   const workspace = await platform.recordConsent(sessionId, consent)
+  await attestTestIdentity(platform, sessionId)
   await platform.acceptAuthorization(sessionId)
   const init = await platform.initializeUpload(sessionId, workspace.id)
   // identity intentionally contains a raw SSN; a tradeline balance differs so a finding is produced

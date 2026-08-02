@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync } from '
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import type {
-  Id, User, Session, Workspace, AuthorizationRecord, Upload, CanonicalReport,
+  Id, User, Session, Workspace, AuthorizationRecord, ConsumerIdentity, Upload, CanonicalReport,
   MatchGroup, Analysis, ConsumerReport, ExportArtifact, DeletionJob, AuditEvent,
   PlatformStore, BlobStore, Consent, ReportPresentationProfile,
 } from '../../../packages/platform/src/index.js'
@@ -36,6 +36,7 @@ export class SqlitePlatformStore implements PlatformStore {
       CREATE TABLE IF NOT EXISTS workspaces (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, created_at TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS authorizations (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, payload_json TEXT NOT NULL);
       CREATE INDEX IF NOT EXISTS idx_authorizations_user_id ON authorizations(user_id);
+      CREATE TABLE IF NOT EXISTS consumer_identities (user_id TEXT PRIMARY KEY, payload_json TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS uploads (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, hash_key TEXT, payload_json TEXT NOT NULL);
       CREATE INDEX IF NOT EXISTS idx_uploads_hash_key ON uploads(hash_key);
       CREATE TABLE IF NOT EXISTS normalized_reports (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, upload_id TEXT NOT NULL, payload_json TEXT NOT NULL);
@@ -85,6 +86,9 @@ export class SqlitePlatformStore implements PlatformStore {
 
   async getAuthorizationByUser(userId: Id) { const row = this.db.prepare('SELECT payload_json FROM authorizations WHERE user_id = ? ORDER BY rowid DESC LIMIT 1').get(userId) as { payload_json: string } | undefined; return row ? JSON.parse(row.payload_json) as AuthorizationRecord : undefined }
   async createAuthorization(record: AuthorizationRecord) { this.db.prepare('INSERT INTO authorizations (id, user_id, payload_json) VALUES (?, ?, ?)').run(record.id, record.userId, JSON.stringify(record)) }
+
+  async getConsumerIdentity(userId: Id) { const row = this.db.prepare('SELECT payload_json FROM consumer_identities WHERE user_id = ?').get(userId) as { payload_json: string } | undefined; return row ? JSON.parse(row.payload_json) as ConsumerIdentity : undefined }
+  async saveConsumerIdentity(identity: ConsumerIdentity) { this.db.prepare('INSERT INTO consumer_identities (user_id, payload_json) VALUES (?, ?) ON CONFLICT(user_id) DO UPDATE SET payload_json = excluded.payload_json').run(identity.userId, JSON.stringify(identity)) }
 
   async getUpload(id: Id) { const row = this.db.prepare('SELECT payload_json FROM uploads WHERE id = ?').get(id) as { payload_json: string } | undefined; return row ? JSON.parse(row.payload_json) as Upload : undefined }
   async listUploadsForUser(userId: Id) { const rows = this.db.prepare('SELECT payload_json FROM uploads WHERE user_id = ?').all(userId) as Array<{ payload_json: string }>; return rows.map(row => JSON.parse(row.payload_json) as Upload) }
@@ -143,6 +147,7 @@ export class SqlitePlatformStore implements PlatformStore {
       this.db.prepare('DELETE FROM sessions WHERE user_id = ?').run(userId)
       this.db.prepare('DELETE FROM workspaces WHERE user_id = ?').run(userId)
       this.db.prepare('DELETE FROM authorizations WHERE user_id = ?').run(userId)
+      this.db.prepare('DELETE FROM consumer_identities WHERE user_id = ?').run(userId)
       this.db.prepare('DELETE FROM auth_tokens WHERE user_id = ?').run(userId)
       this.db.prepare('DELETE FROM audit_events WHERE actor_id = ? OR subject_id = ?').run(userId, userId)
       this.db.prepare('DELETE FROM deletion_jobs WHERE user_id = ?').run(userId)

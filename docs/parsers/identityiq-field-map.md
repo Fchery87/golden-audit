@@ -46,6 +46,38 @@ Each parsed tradeline maps to `ParserTradeline` (creditor, maskedAccount, balanc
 - **Remarks and special comment codes:** the adapter recognizes the separate `Remarks` and `Special Comment Code(s)` labels and records their displayed text/code separately for each bureau. It never derives a special code from free-text remarks.
 - **No re-aging conclusion:** movement requires reliably matched account identity across separately dated reports. This one-report parser and analysis model do not make that comparison, so no re-aging or DOFD Finding is published in this slice.
 
+## Personal Information section (added 2026-08-02)
+
+Maps to `ParserPersonalInformation` (names, also-known-as, dates of birth, SSN fragments, current
+and previous addresses, employers) with per-bureau provenance. Three layout facts were established
+against all four authorized samples, each after a plausible-looking implementation failed on them:
+
+- **The label is vertically centered against its value block**, so it is the *middle* row, not the
+  first. Continuation rows attach to the nearest label that accepts continuations; single-line
+  fields (Name, Date of Birth, SSN) accept none, which is what stops an address's first line from
+  attaching to the date above it.
+- **Label and value separate by x-center, not by a left-edge cut.** TransUnion values begin around
+  x≈202 while labels end around x≈157, and several value words start left of any fixed `xMin`
+  boundary — an `xMin`-based split silently merges the first bureau's value into the label text.
+- **Addresses wrap over three or four rows with no delimiter**, so each bureau column's tokens are
+  segmented at ZIP boundaries. A segment not terminated by a ZIP is discarded rather than emitted
+  as a partial address, and reported-on dates interleaved between addresses are dropped so they
+  cannot prefix the next one.
+
+**Current vs previous comes from the bureau's own ordering** (first address = current), because the
+`Previous Address(es)` label is centered and therefore sits *below* rows that already belong to it —
+a label-position split assigns them to the wrong field.
+
+**Dates of birth keep the precision the report states.** Bureaus commonly disagree on precision for
+the same consumer (one gives `1/9/1986`, another `1986`). Padding the year-only value to a full date
+would invent a month and day the document never claimed and then report the invention as a
+discrepancy, so comparison is prefix-based at the stated precision.
+
+**SSN:** only a four-digit fragment from an already-masked display is retained. A display carrying
+more than four digits is recorded as unreadable rather than trimmed — the inbound redaction boundary
+owns that case, and trimming here would hide its failure. Employer values must contain letters, so a
+trailing ZIP row from the address block above cannot be published as an employment record.
+
 
 ## Fallback structural-row guard
 

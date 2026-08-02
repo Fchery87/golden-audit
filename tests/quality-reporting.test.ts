@@ -1,6 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { CreditAnalysisPlatform, type Bureau } from '../packages/platform/src/index.js'
+import { attestTestIdentity } from './support-identity.js'
 
 const password = 'correct horse battery staple'
 const consent = { version: '2026-01', adultUSConsumer: true, authorizedReportUse: true, educationalLimitations: true, sensitiveDataHandling: true, residence: 'US-CA', analysisJurisdiction: 'US-CA' } as const
@@ -19,6 +20,7 @@ async function setup(email: string, analysisJurisdiction: 'US-CA' | 'US-NY' = 'U
   const inviteCode = await platform.issueInvite()
   const account = await platform.register({ email, password, inviteCode })
   const workspace = await platform.recordConsent(account.sessionId, { ...consent, residence: analysisJurisdiction, analysisJurisdiction })
+  await attestTestIdentity(platform, account.sessionId)
   await platform.acceptAuthorization(account.sessionId)
   return { platform, ...account, workspace }
 }
@@ -110,8 +112,10 @@ test('quality reporting: segments metrics by provider, document type, and jurisd
   assert.equal(segment.findings.bySeverity.low, 0)
   assert.equal(segment.matching.proposedGroups, 2)
   assert.equal(segment.matching.confirmedGroups, 2)
-  assert.equal(segment.matching.highConfidenceProposals, 1)
-  assert.equal(segment.matching.splitGroups, 1)
+  // Both synthetic groups are creditor + masked-account matches with one entry per bureau, so both
+  // clear the publishable-confidence floor and auto-confirm; neither is left split.
+  assert.equal(segment.matching.highConfidenceProposals, 2)
+  assert.equal(segment.matching.splitGroups, 0)
   assert.equal(segment.parser.averageTradelinesPerReport, 2)
   assert.equal(segment.parser.reportsWithTradelines, 2)
   assert.ok(segment.latency.uploadToParse.averageMs >= 0)

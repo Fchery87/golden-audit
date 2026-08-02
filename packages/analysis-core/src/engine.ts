@@ -2,6 +2,10 @@ import { randomUUID } from 'node:crypto'
 import type { FindingClassification, Severity } from './taxonomy.js'
 import type { Evidence, SourceReference } from './evidence.js'
 import type { Analysis, Finding, RuleAudit } from './findings.js'
+import {
+  comparableIdentityValues, datesOfBirthAgree, identityEvidence, namesAgree,
+  type AttestedIdentity, type EvaluableIdentityValue, type ReportedIdentity,
+} from './identity.js'
 
 /**
  * Ingest-agnostic deterministic analysis engine (ADR-0002).
@@ -50,6 +54,8 @@ type EvaluatorContext = {
   rule: EvaluableRule
   tradelinesById: Map<string, EvaluableTradeline>
   confirmedMatches: MatchRef[]
+  attestedIdentity?: AttestedIdentity
+  reportedIdentity?: ReportedIdentity
 }
 
 type EvaluatorResult = { audits: RuleAudit[]; findings: Omit<Finding, 'id'>[] }
@@ -519,10 +525,177 @@ const partialFurnishingObservation: RuleEvaluator = ({ rule, tradelinesById, con
 }
 registerRuleEvaluator('partial-furnishing-observation', partialFurnishingObservation)
 
+// --- Identity evaluators ---
+//
+// These are the only rules whose reference value comes from outside the document. When the
+// consumer has not supplied one, they suppress with that reason rather than silently skipping —
+// the coverage table then says the check did not run and why, instead of implying it passed.
+
+type IdentityEvaluatorArgs = {
+  ctx: EvaluatorContext
+  values: (reported: ReportedIdentity) => EvaluableIdentityValue[]
+  agrees: (attested: AttestedIdentity, value: EvaluableIdentityValue) => boolean
+  emptyReason: string
+  agreeReason: string
+  title: (value: EvaluableIdentityValue) => string
+  severity: Severity
+  alternativeExplanations: string[]
+  verificationDocuments: string[]
+  suggestedAction: string
+}
+
+function compareAgainstAttestedIdentity(args: IdentityEvaluatorArgs): EvaluatorResult {
+  const { ctx, rule } = { ...args, rule: args.ctx.rule }
+  const audits: RuleAudit[] = []
+  const findings: Omit<Finding, 'id'>[] = []
+  if (!ctx.attestedIdentity || !ctx.reportedIdentity) {
+    audits.push(suppress(rule.id, 'No attested identity is on record for this account, so there is nothing to compare the report against'))
+    return { audits, findings }
+  }
+  const comparable = comparableIdentityValues(args.values(ctx.reportedIdentity), rule.minimumConfidence)
+  if (comparable.length === 0) {
+    audits.push(suppress(rule.id, args.emptyReason))
+    return { audits, findings }
+  }
+  const differing = comparable.filter(value => !args.agrees(ctx.attestedIdentity!, value))
+  if (differing.length === 0) {
+    audits.push(skip(rule.id, args.agreeReason))
+    return { audits, findings }
+  }
+  for (const value of differing) {
+    findings.push({
+      classification: rule.classification,
+      title: args.title(value),
+      severity: args.severity,
+      confidence: value.confidence,
+      evidence: [identityEvidence(value)],
+      limitations: rule.limitations,
+      alternativeExplanations: args.alternativeExplanations,
+      verificationDocuments: args.verificationDocuments,
+      authorityIds: rule.authorityIds,
+      educationModuleIds: rule.educationModuleIds,
+      suggestedAction: args.suggestedAction,
+    })
+    audits.push(trigger(rule.id, `A displayed ${value.field} does not match the details on record for this account`))
+  }
+  return { audits, findings }
+}
+
+const bureauLabel = (value: EvaluableIdentityValue): string => value.bureau && value.bureau !== 'unknown' ? ` on ${value.bureau}` : ''
+
+registerRuleEvaluator('identity-name-not-attested', ctx => compareAgainstAttestedIdentity({
+  ctx,
+  values: reported => reported.names,
+  agrees: (attested, value) => namesAgree(attested.fullName, value.normalized ?? ''),
+  emptyReason: 'No readable name appears in the personal-information section',
+  agreeReason: 'Every displayed name matches the name on record for this account',
+  title: value => `A name shown${bureauLabel(value)} does not match the name you provided`,
+  severity: 'medium',
+  alternativeExplanations: [
+    'A former name, a maiden name, or a data-entry variation can appear without anything being wrong',
+    'Reports frequently display a name in a different order or with a middle name omitted',
+  ],
+  verificationDocuments: ['Government-issued photo identification', 'Social Security card'],
+  suggestedAction: 'Compare the displayed name with your identification documents and take any unexplained difference to the reporting company',
+}))
+
+registerRuleEvaluator('identity-date-of-birth-not-attested', ctx => compareAgainstAttestedIdentity({
+  ctx,
+  values: reported => reported.datesOfBirth,
+  agrees: (attested, value) => datesOfBirthAgree(attested.dateOfBirth, value.normalized ?? ''),
+  emptyReason: 'No readable date of birth appears in the personal-information section',
+  agreeReason: 'Every displayed date of birth is consistent with the date on record for this account',
+  title: value => `A date of birth shown${bureauLabel(value)} does not match the date you provided`,
+  severity: 'high',
+  alternativeExplanations: ['A transposed digit at the furnisher or the reporting company can produce this difference'],
+  verificationDocuments: ['Birth certificate', 'Government-issued photo identification'],
+  suggestedAction: 'Verify the displayed date of birth against your identification documents and take any difference to the reporting company',
+}))
+
+registerRuleEvaluator('identity-ssn-fragment-not-attested', ctx => compareAgainstAttestedIdentity({
+  ctx,
+  values: reported => reported.ssnFragments,
+  agrees: (attested, value) => (value.normalized ?? '') === attested.ssnLastFour,
+  emptyReason: 'No readable Social Security number fragment appears in the personal-information section',
+  agreeReason: 'Every displayed Social Security number fragment matches the digits on record for this account',
+  title: value => `The Social Security number fragment shown${bureauLabel(value)} does not match the digits you provided`,
+  severity: 'high',
+  alternativeExplanations: ['A single transposed digit at the furnisher can produce this difference'],
+  verificationDocuments: ['Social Security card', 'Government-issued photo identification'],
+  suggestedAction: 'Verify the displayed digits against your Social Security card and take any difference to the reporting company',
+}))
+
+registerRuleEvaluator('identity-address-not-attested', ctx => compareAgainstAttestedIdentity({
+  ctx,
+  values: reported => ctx.reportedIdentity?.addresses ?? [],
+  agrees: (attested, value) => {
+    const key = (value as ReportedIdentity['addresses'][number]).comparisonKey
+    return attested.addressKeys.includes(key)
+  },
+  emptyReason: 'No readable address appears in the personal-information section',
+  agreeReason: 'Every displayed address matches an address you provided',
+  title: value => `An address shown${bureauLabel(value)} is not one you listed`,
+  severity: 'low',
+  alternativeExplanations: [
+    'An older address you did not list, a temporary address, or a formatting difference can all produce this',
+    'Addresses are often retained long after a move',
+  ],
+  verificationDocuments: ['Utility bill or lease showing your address history'],
+  suggestedAction: 'Check whether this is an address you have used; if you do not recognize it at all, raise it with the reporting company',
+}))
+
+/**
+ * Bureaus disagreeing with each other on a name is a separate signal from any bureau disagreeing
+ * with the consumer, and it needs no attested reference — so it stays available even for a report
+ * read before intake data existed.
+ */
+const crossBureauIdentityNameDifference: RuleEvaluator = ({ rule, reportedIdentity }) => {
+  const audits: RuleAudit[] = []
+  const findings: Omit<Finding, 'id'>[] = []
+  if (!reportedIdentity) {
+    audits.push(suppress(rule.id, 'No personal-information section was read from this report'))
+    return { audits, findings }
+  }
+  const byBureau = new Map<string, EvaluableIdentityValue>()
+  for (const value of comparableIdentityValues(reportedIdentity.names, rule.minimumConfidence)) {
+    const bureau = value.bureau ?? 'unknown'
+    if (bureau === 'unknown' || byBureau.has(bureau)) continue
+    byBureau.set(bureau, value)
+  }
+  const values = [...byBureau.values()]
+  if (values.length < 2) {
+    audits.push(skip(rule.id, 'Fewer than two bureaus displayed a readable name'))
+    return { audits, findings }
+  }
+  const reference = values[0]?.normalized ?? ''
+  if (values.every(value => namesAgree(reference, value.normalized ?? ''))) {
+    audits.push(skip(rule.id, 'Displayed names agree across the bureaus that showed one'))
+    return { audits, findings }
+  }
+  findings.push({
+    classification: rule.classification,
+    title: 'The bureaus display different names for this file',
+    severity: 'medium',
+    confidence: Math.min(...values.map(value => value.confidence)),
+    evidence: values.map(value => identityEvidence(value)),
+    limitations: rule.limitations,
+    alternativeExplanations: ['Bureaus receive identifying details from different furnishers and update them on different schedules'],
+    verificationDocuments: ['Government-issued photo identification'],
+    authorityIds: rule.authorityIds,
+    educationModuleIds: rule.educationModuleIds,
+    suggestedAction: 'Compare each displayed name with your identification documents and raise any you do not recognize with that reporting company',
+  })
+  audits.push(trigger(rule.id, 'Displayed names differ across bureaus'))
+  return { audits, findings }
+}
+registerRuleEvaluator('cross-bureau-identity-name-difference', crossBureauIdentityNameDifference)
+
 export type AnalysisInput = {
   rules: EvaluableRule[]
   tradelines: EvaluableTradeline[]
   confirmedMatches: MatchRef[]
+  attestedIdentity?: AttestedIdentity
+  reportedIdentity?: ReportedIdentity
   versions: Analysis['versions']
 }
 
@@ -542,7 +715,11 @@ export function evaluateAnalysis(input: AnalysisInput): Analysis {
       audit.push({ ruleId: rule.id, outcome: 'skipped', reason: 'No supported evaluator for this rule' })
       continue
     }
-    const { audits, findings } = evaluator({ rule, tradelinesById, confirmedMatches: input.confirmedMatches })
+    const { audits, findings } = evaluator({
+      rule, tradelinesById, confirmedMatches: input.confirmedMatches,
+      ...(input.attestedIdentity ? { attestedIdentity: input.attestedIdentity } : {}),
+      ...(input.reportedIdentity ? { reportedIdentity: input.reportedIdentity } : {}),
+    })
     audit.push(...audits)
     rawFindings.push(...findings)
   }

@@ -21,6 +21,29 @@ export type Consent = {
 
 export type AuthorizationRecord = { id: Id; userId: Id; version: string; acceptedAt: string }
 
+export type PostalAddress = { line1: string; line2?: string; city: string; state: string; postalCode: string }
+
+/**
+ * Consumer-attested identity captured at intake.
+ *
+ * This is the reference set the report's own personal-information section is compared against.
+ * Without it the identity check category cannot run at all: a report can only be compared with
+ * itself, so "the name on this report is not your name" is unprovable from report data alone.
+ * The attestation is what makes an identity variance Finding defensible — the consumer, not the
+ * parser, supplied the value being compared.
+ */
+export type ConsumerIdentity = {
+  userId: Id
+  fullName: string
+  dateOfBirth: string
+  /** Last four digits only. The full number is never collected, transmitted, or stored. */
+  ssnLastFour: string
+  currentAddress: PostalAddress
+  previousAddresses: PostalAddress[]
+  attestationVersion: string
+  attestedAt: string
+}
+
 export type LaunchScope = {
   mode: LaunchScopeMode
   approvedStates: Jurisdiction[]
@@ -117,13 +140,22 @@ export type CanonicalReport = {
 }
 
 export type ConsumerReviewValue = { id: Id; bureau: Bureau; field: string; normalized: string | number | null; originalDisplay: string; state: CanonicalValue<unknown>['state']; source: Pick<SourceReference, 'kind' | 'locator'>; confidence: number; review?: CanonicalValue<unknown>['review'] }
+/**
+ * Optional, post-analysis correction surface for the values this parser is least sure about.
+ *
+ * `values` holds only extraction exceptions — values the parser failed on, or read below the
+ * publishable confidence threshold. Confidently-read values are never listed: asking a consumer
+ * to re-transcribe what the parser already read correctly is the parser's QA work, not theirs,
+ * and a confirmation collected that way would launder parser error into attested data.
+ * Nothing here gates analysis; `required` is an upper bound on what a consumer *may* correct.
+ */
 export type ConsumerValueReview = { reportId: Id; required: number; decided: number; complete: boolean; values: ConsumerReviewValue[] }
 
 export type GovernanceStatus = 'draft' | 'approved' | 'rejected' | 'published' | 'disabled'
 export type GovernanceHistory = { action: GovernanceStatus | 'revision-requested'; reviewerId: Id; at: string; reason: string }
 export type Authority = { id: Id; title?: string; citation: string; sourceUrl?: string; jurisdiction: Jurisdiction; effectiveFrom: string; permittedUse: string; limitations: string[]; status: GovernanceStatus; history: GovernanceHistory[] }
 export type EducationModuleKind = 'section-primer' | 'finding-module'
-export type EducationModule = { id: Id; kind?: EducationModuleKind; section?: 'tradelines' | 'balances' | 'status' | 'inquiries' | 'finding'; title: string; body: string; authorityIds?: Id[]; jurisdiction: Jurisdiction; effectiveFrom: string; permittedUse: string; limitations: string[]; status: GovernanceStatus; history: GovernanceHistory[] }
+export type EducationModule = { id: Id; kind?: EducationModuleKind; section?: 'tradelines' | 'balances' | 'status' | 'inquiries' | 'personal-information' | 'finding'; title: string; body: string; authorityIds?: Id[]; jurisdiction: Jurisdiction; effectiveFrom: string; permittedUse: string; limitations: string[]; status: GovernanceStatus; history: GovernanceHistory[] }
 export type ReviewerRole = 'compliance-reviewer' | 'engineering-reviewer' | 'release-manager'
 export type Reviewer = { id: Id; role: ReviewerRole }
 export type ReviewedGovernanceCatalog = {
@@ -173,7 +205,69 @@ export type ReportAccountCell = { label: string; value: string; source: Pick<Sou
 export type ReportAccountRow = { id: Id; bureau: Bureau; cells: ReportAccountCell[] }
 export type ReportScoreRow = { bureau: Bureau; score: number; scoreScale: string; source: Pick<SourceReference, 'kind' | 'locator'>; scaleSource: Pick<SourceReference, 'kind' | 'locator'> }
 export type ReportInquiryRow = { id: Id; bureau: Bureau; creditor: string; businessType?: string; date: string; source: Pick<SourceReference, 'kind' | 'locator'> }
-export type ReportContent = { catalogVersion: string; rulesetVersion: string; parserVersion: string; sectionPrimers: ReportPrimer[]; coverage: CoverageRow[]; parserFields: ParserFieldAvailability[]; accountRows?: ReportAccountRow[]; scoreRows?: ReportScoreRow[]; inquiryRows?: ReportInquiryRow[] }
+
+/**
+ * Top-of-report audit summary — the "what did you find" layer every comparable platform leads
+ * with. Every number here is a count of what this reading actually read; none of it is a score
+ * prediction, a projection, or a judgment that any entry is wrong.
+ */
+export type ReportNegativeItemSummary = {
+  total: number
+  collections: number
+  pastDueAccounts: number
+  derogatoryStatusAccounts: number
+  /** Accounts whose status this parser could not read — excluded from the counts above rather than assumed clean. */
+  statusUnavailable: number
+}
+export type ReportUtilizationSummary = {
+  revolvingBalanceCents: number
+  revolvingLimitCents: number
+  /** null when no revolving account carried both a balance and a limit this parser could read. */
+  ratio: number | null
+  accountsCounted: number
+  accountsWithoutLimit: number
+}
+export type ReportSummary = {
+  accountsRead: number
+  accountsByBureau: Partial<Record<Bureau, number>>
+  openAccounts: number
+  closedAccounts: number
+  negativeItems: ReportNegativeItemSummary
+  /** Findings whose rule compares the same account across two or more bureaus. */
+  crossBureauInconsistencies: number
+  identityObservations: number
+  inquiriesRead: number
+  totalBalanceCents: number | null
+  totalPastDueCents: number | null
+  utilization: ReportUtilizationSummary
+}
+
+/** Personal-information entries read from the report, paired with whether they match the
+ *  identity the consumer attested to at intake. */
+export type ReportIdentityRow = {
+  id: Id
+  bureau: Bureau
+  field: string
+  value: string
+  attestationMatch: 'matches-attested' | 'differs-from-attested' | 'not-compared'
+  source: Pick<SourceReference, 'kind' | 'locator'>
+}
+
+export type ReimportAccountRef = { creditor: string; bureau: Bureau; maskedAccount: string }
+export type ReimportFieldChange = { field: string; from: string; to: string }
+export type ReimportDiff = {
+  previousConsumerReportId: Id
+  previousGeneratedAt: string
+  newAccounts: ReimportAccountRef[]
+  removedAccounts: ReimportAccountRef[]
+  changedAccounts: Array<ReimportAccountRef & { changes: ReimportFieldChange[] }>
+  scoreChanges: Array<{ bureau: Bureau; from: number; to: number; delta: number }>
+  findingsResolved: string[]
+  findingsNew: string[]
+  findingsUnchanged: number
+}
+
+export type ReportContent = { catalogVersion: string; rulesetVersion: string; parserVersion: string; sectionPrimers: ReportPrimer[]; coverage: CoverageRow[]; parserFields: ParserFieldAvailability[]; summary?: ReportSummary; identityRows?: ReportIdentityRow[]; reimport?: ReimportDiff; pendingMatchGroups?: number; accountRows?: ReportAccountRow[]; scoreRows?: ReportScoreRow[]; inquiryRows?: ReportInquiryRow[] }
 export type ReportPresentationProfile = {
   revision: number
   organizationName: string
@@ -193,7 +287,7 @@ export type ReportPresentationProfile = {
   updatedBy?: Id
 }
 export type ReportRecipient = { displayName: string; source: Pick<SourceReference, 'kind' | 'locator'>; confidence: number }
-export type ConsumerReport = { id: Id; userId: Id; analysisId: Id; limitations: string[]; overview: Record<string, number>; findings: ReportFinding[]; actions: ActionItem[]; content?: ReportContent; presentation: ReportPresentationProfile; recipient?: ReportRecipient; generatedAt: string }
+export type ConsumerReport = { id: Id; userId: Id; analysisId: Id; /** The CanonicalReport this reading was produced from. Lets the corrections surface target the right source document without a second round trip through the analysis. */ sourceReportId?: Id; limitations: string[]; overview: Record<string, number>; findings: ReportFinding[]; actions: ActionItem[]; content?: ReportContent; presentation: ReportPresentationProfile; recipient?: ReportRecipient; generatedAt: string }
 export type ExportArtifact = { id: Id; userId: Id; reportId: Id; formatVersion?: string; content: string; createdAt: string }
 export type DeletionJob = { id: Id; userId: Id; status: 'pending-provider' | 'complete'; deleted: string[]; delayed: string[]; completedAt?: string }
 /** Purpose-limited operational proof of completed deletion. It must never carry an account, user, session, report, or artifact identifier. */

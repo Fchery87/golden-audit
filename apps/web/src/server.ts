@@ -87,6 +87,7 @@ type ConsumerConsentBody = {
   analysisJurisdiction: string
 }
 type ConsumerAuthorizationBody = { version: string; accepted: boolean }
+type ConsumerIdentityBody = { fullName: unknown; dateOfBirth: unknown; ssnLastFour: unknown; currentAddress: unknown; previousAddresses?: unknown; attestationVersion?: unknown; accurateAndComplete?: unknown }
 type UploadInitBody = { workspaceId: string }
 type UploadCompleteBody = { uploadId: string; token: string; fileName: string; mediaType: string; contentBase64: string }
 type AnalysisKickoffBody = { jurisdiction?: string }
@@ -102,7 +103,7 @@ type VerifyEmailBody = { token: string }
 type TradelineSummary = { id: string; bureau: string; creditor: string; maskedAccount: string; balanceCents: number | null }
 
 type ConsumerFlowSummary = {
-  status: 'analysis-complete' | 'value-review-required' | 'match-review-required'
+  status: 'analysis-complete' | 'match-review-required'
   reportId: string
   matches?: MatchGroup[]
   tradelines?: TradelineSummary[]
@@ -187,11 +188,19 @@ function resolveRulesetForJurisdiction(jurisdiction: Jurisdiction): string {
   return version
 }
 
+/**
+ * Upload → reading, in one call.
+ *
+ * Parse, match, analyze, render, and export all run here. Nothing in this sequence needs a human
+ * decision: unambiguous account groups confirm themselves, ambiguous ones suppress the checks
+ * that would have used them, and low-confidence values suppress on their own.
+ */
 async function kickoffAnalysisFlow(sessionId: string, uploadId: string, body: AnalysisKickoffBody): Promise<ConsumerFlowSummary> {
   const jurisdiction = normalizeState(body.jurisdiction ?? launchScope?.provisionalSelectedState ?? 'US-CA')
   const report = await platform.parseReport(sessionId, uploadId)
-  const review = await platform.getValueReview(sessionId, report.id)
-  return { status: 'value-review-required', reportId: report.id, required: review.required, decided: review.decided }
+  await platform.proposeMatches(sessionId, report.id)
+  const completed = await completeAnalysisForReport(sessionId, report.id, jurisdiction)
+  return { status: 'analysis-complete', reportId: report.id, ...completed }
 }
 
 async function completeAnalysisForReport(sessionId: string, reportId: string, jurisdiction: Jurisdiction): Promise<{ analysisId: string; consumerReportId: string; exportId: string }> {
@@ -304,12 +313,28 @@ async function handleValueDecision(request: IncomingMessage, response: ServerRes
   const body = await readJsonBody(request) as ReviewValueBody
   respondJson(response, 200, await platform.reviewValue(getSessionId(request), reportId, valueId, body))
 }
+/** Closing the optional corrections pass re-runs analysis so any correction actually reaches the
+ *  reading. Nothing is gated on it — a consumer who never opens it still has a delivered report. */
 async function handleCompleteValueReview(request: IncomingMessage, response: ServerResponse, reportId: string): Promise<void> {
   const sessionId = getSessionId(request)
   await platform.completeReview(sessionId, reportId)
-  const matches = await platform.proposeMatches(sessionId, reportId)
-  const unresolved = matches.filter(match => match.state !== 'confirmed' && match.state !== 'rejected')
-  respondJson(response, unresolved.length > 0 ? 202 : 201, unresolved.length > 0 ? { status: 'match-review-required', reportId, matches } : { status: 'review-complete', reportId, matches })
+  const jurisdiction = normalizeState(launchScope?.provisionalSelectedState ?? 'US-CA')
+  const completed = await completeAnalysisForReport(sessionId, reportId, jurisdiction)
+  respondJson(response, 201, { status: 'analysis-complete', reportId, ...completed })
+}
+
+async function handlePendingMatches(request: IncomingMessage, response: ServerResponse, reportId: string): Promise<void> {
+  respondJson(response, 200, await platform.listPendingMatches(getSessionId(request), reportId))
+}
+
+async function handleGetIdentity(request: IncomingMessage, response: ServerResponse): Promise<void> {
+  const identity = await platform.getConsumerIdentity(getSessionId(request))
+  respondJson(response, 200, { identity: identity ?? null })
+}
+async function handleRecordIdentity(request: IncomingMessage, response: ServerResponse): Promise<void> {
+  const sessionId = getSessionId(request)
+  const body = await readJsonBody(request) as ConsumerIdentityBody
+  respondJson(response, 201, await platform.recordConsumerIdentity(sessionId, body))
 }
 
 async function handleMatchDecision(request: IncomingMessage, response: ServerResponse, matchId: string): Promise<void> {
@@ -430,6 +455,8 @@ const server = createServer(async (request, response) => {
     if (request.method === 'POST' && path === '/consumer/password-reset/confirm') return await handlePasswordResetConfirm(request, response)
     if (request.method === 'POST' && path === '/consumer/email-verification/request') return await handleEmailVerificationRequest(request, response)
     if (request.method === 'POST' && path === '/consumer/email-verification/confirm') return await handleVerifyEmail(request, response)
+    if (request.method === 'GET' && path === '/consumer/identity') return await handleGetIdentity(request, response)
+    if (request.method === 'POST' && path === '/consumer/identity') return await handleRecordIdentity(request, response)
     if (request.method === 'POST' && path === '/consumer/consent') return await handleConsent(request, response)
     if (request.method === 'POST' && path === '/consumer/authorization') return await handleAuthorization(request, response)
     if (request.method === 'POST' && path === '/consumer/uploads/init') return await handleUploadInit(request, response)
@@ -442,6 +469,8 @@ const server = createServer(async (request, response) => {
     const valueDecisionMatch = request.method === 'POST' ? path.match(/^\/consumer\/reports\/([^/]+)\/values\/([^/]+)\/decision$/) : null
     if (valueDecisionMatch) return await handleValueDecision(request, response, valueDecisionMatch[1] ?? '', valueDecisionMatch[2] ?? '')
 
+    const pendingMatchesMatch = request.method === 'GET' ? path.match(/^\/consumer\/reports\/([^/]+)\/pending-matches$/) : null
+    if (pendingMatchesMatch) return await handlePendingMatches(request, response, pendingMatchesMatch[1] ?? '')
     const kickoffMatch = request.method === 'POST' ? path.match(/^\/consumer\/uploads\/([^/]+)\/kickoff-analysis$/) : null
     if (kickoffMatch) return await handleKickoffAnalysis(request, response, kickoffMatch[1] ?? '')
 

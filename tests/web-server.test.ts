@@ -90,13 +90,32 @@ type ConsumerReportResponse = {
   analysisId: string
   findings: Array<{ id: string }>
   limitations: string[]
-  content?: { accountRows?: Array<{ bureau: string; cells: Array<{ label: string; value: string; source: { kind: string; locator: string } }> }> }
+  content?: {
+    accountRows?: Array<{ bureau: string; cells: Array<{ label: string; value: string; source: { kind: string; locator: string } }> }>
+    summary?: { accountsRead: number; openAccounts: number; crossBureauInconsistencies: number; identityObservations: number; negativeItems: { total: number } }
+    identityRows?: Array<{ field: string; value: string; attestationMatch: string }>
+    pendingMatchGroups?: number
+  }
 }
 
 type ExportResponse = {
   id: string
   reportId: string
   content: string
+}
+
+/** Uploads require an attested identity, because the identity checks have no reference set without
+ *  one. Fictitious values, deliberately unlike the synthetic report fixtures. */
+async function attestIdentityFor(port: number, sessionHeader: Record<string, string>): Promise<void> {
+  const recorded = await postJson(port, '/consumer/identity', {
+    fullName: 'MORGAN QUINCY RIVERA',
+    dateOfBirth: '1985-03-17',
+    ssnLastFour: '4321',
+    currentAddress: { line1: '4120 CEDAR HOLLOW RD', city: 'SPRINGFIELD', state: 'CA', postalCode: '90210' },
+    previousAddresses: [],
+    accurateAndComplete: true,
+  }, sessionHeader)
+  assert.equal(recorded.statusCode, 201)
 }
 
 async function completeValueReviewFor(port: number, reportId: string, sessionHeader: Record<string, string>): Promise<KickoffResponse> {
@@ -309,6 +328,8 @@ test('web boundary supports the smallest real consumer pilot flow through analys
     assert.match(authorization.body.id, /[0-9a-f-]{36}/i)
     assert.equal(authorization.body.version, 'authorization-2026-01')
 
+    await attestIdentityFor(port, sessionHeader)
+
     const uploadInit = await postJson<UploadInitResponse>(port, '/consumer/uploads/init', {
       workspaceId: consent.body.workspaceId,
     }, sessionHeader)
@@ -331,23 +352,22 @@ test('web boundary supports the smallest real consumer pilot flow through analys
     assert.equal(uploadComplete.body.stage, 'ready-to-parse')
     assert.equal(uploadComplete.body.mediaType, 'text/html')
 
+    // One upload action produces the delivered reading. There is no value-confirmation step and no
+    // match-confirmation step for an unambiguous group: the whole point of the change is that a
+    // consumer who uploads a report gets a report back.
     const kickoff = await postJson<KickoffResponse>(port, `/consumer/uploads/${uploadComplete.body.id}/kickoff-analysis`, {
       jurisdiction: 'CA',
     }, sessionHeader)
-    assert.equal(kickoff.statusCode, 202)
-    assert.equal(kickoff.body.status, 'value-review-required')
-    const reviewCompleted = await completeValueReviewFor(port, kickoff.body.reportId, sessionHeader)
-    assert.equal(reviewCompleted.status, 'match-review-required')
-    assert.equal(reviewCompleted.matches?.length, 1)
-    assert.equal(reviewCompleted.matches?.[0]?.state, 'split')
-    const confirmed = await postJson<{ id: string; state: string }>(port, `/consumer/matches/${reviewCompleted.matches?.[0]?.id}/decision`, { action: 'confirmed', reason: 'I reviewed this two-account match.' }, sessionHeader)
-    assert.equal(confirmed.statusCode, 200)
-    const completed = await postJson<KickoffResponse>(port, `/consumer/reports/${kickoff.body.reportId}/complete-analysis`, { jurisdiction: 'CA' }, sessionHeader)
-    assert.equal(completed.statusCode, 201)
-    assert.equal(completed.body.status, 'analysis-complete')
-    const analysisId = completed.body.analysisId
-    const consumerReportId = completed.body.consumerReportId
-    const exportId = completed.body.exportId
+    assert.equal(kickoff.statusCode, 201)
+    assert.equal(kickoff.body.status, 'analysis-complete')
+
+    const pending = await getJson<{ matches: Array<{ id: string }> }>(port, `/consumer/reports/${kickoff.body.reportId}/pending-matches`, sessionHeader)
+    assert.equal(pending.statusCode, 200)
+    assert.equal(pending.body.matches.length, 0, 'an unambiguous cross-bureau group needs no consumer confirmation')
+
+    const analysisId = kickoff.body.analysisId
+    const consumerReportId = kickoff.body.consumerReportId
+    const exportId = kickoff.body.exportId
     assert.match(kickoff.body.reportId, /[0-9a-f-]{36}/i)
     assert.match(analysisId ?? '', /[0-9a-f-]{36}/i)
     assert.match(consumerReportId ?? '', /[0-9a-f-]{36}/i)
@@ -366,6 +386,12 @@ test('web boundary supports the smallest real consumer pilot flow through analys
     assert.equal(consumerReport.body.content?.accountRows?.[0]?.cells.find(cell => cell.label === 'Creditor')?.value, 'Example Bank')
     assert.match(consumerReport.body.content?.accountRows?.[0]?.cells.find(cell => cell.label === 'Creditor')?.source.locator ?? '', /^0:creditor$/)
     assert.equal(consumerReport.body.content?.accountRows?.some(row => row.cells.some(cell => /inquiry/i.test(cell.label))), false)
+    // The audit summary is the top-of-report layer: account counts, negative markers, and the
+    // cross-bureau difference count, all per account rather than per bureau entry.
+    assert.equal(consumerReport.body.content?.summary?.accountsRead, 1, 'two bureau entries for one account count as one account')
+    assert.equal(consumerReport.body.content?.summary?.openAccounts, 1)
+    assert.ok((consumerReport.body.content?.summary?.crossBureauInconsistencies ?? 0) >= 1)
+    assert.equal(consumerReport.body.content?.pendingMatchGroups, undefined)
 
     const exportArtifact = await getJson<ExportResponse>(port, `/consumer/exports/${exportId}`, sessionHeader)
     assert.equal(exportArtifact.statusCode, 200)
@@ -406,6 +432,7 @@ test('web boundary supports manual subgroup confirmation for oversized collision
       analysisJurisdiction: 'CA',
     }, sessionHeader)
     await postJson<AuthorizationResponse>(port, '/consumer/authorization', { version: 'authorization-2026-01', accepted: true }, sessionHeader)
+    await attestIdentityFor(port, sessionHeader)
     const uploadInit = await postJson<UploadInitResponse>(port, '/consumer/uploads/init', { workspaceId: consent.body.workspaceId }, sessionHeader)
 
     const oversizedReport = makeSyntheticReport([
@@ -423,19 +450,27 @@ test('web boundary supports manual subgroup confirmation for oversized collision
       contentBase64: Buffer.from(`<html>GOLDEN-AUDIT-REPORT:${JSON.stringify(oversizedReport)}</body></html>`).toString('base64'),
     })
 
+    // An oversized collision set is genuinely ambiguous, so it stays unconfirmed — but it no longer
+    // withholds the reading. The reading is delivered with the dependent checks suppressed, and the
+    // consumer can resolve the set afterwards to unlock them.
     const kickoff = await postJson<KickoffResponse>(port, `/consumer/uploads/${uploadComplete.body.id}/kickoff-analysis`, {
       jurisdiction: 'CA',
-      autoConfirmSimpleMatches: false,
     }, sessionHeader)
-    assert.equal(kickoff.statusCode, 202)
-    assert.equal(kickoff.body.status, 'value-review-required')
-    const reviewCompleted = await completeValueReviewFor(port, kickoff.body.reportId, sessionHeader)
-    assert.equal(reviewCompleted.status, 'match-review-required')
-    assert.equal(reviewCompleted.matches?.length, 1)
-    assert.equal(reviewCompleted.matches?.[0]?.state, 'split')
-    assert.ok(reviewCompleted.matches?.[0]?.signals.includes('collision-set'))
-    const subgroup = await postJson<{ id: string; state: string; tradelineIds: string[] }>(port, `/consumer/matches/${reviewCompleted.matches?.[0]?.id}/confirm-subgroup`, {
-      tradelineIds: reviewCompleted.matches?.[0]?.tradelineIds.slice(0, 2) ?? [],
+    assert.equal(kickoff.statusCode, 201)
+    assert.equal(kickoff.body.status, 'analysis-complete')
+
+    const deliveredWithPending = await getJson<ConsumerReportResponse>(port, `/consumer/reports/${kickoff.body.consumerReportId}`, sessionHeader)
+    assert.equal(deliveredWithPending.statusCode, 200)
+    assert.equal(deliveredWithPending.body.content?.pendingMatchGroups, 1)
+
+    const pending = await getJson<{ matches: Array<{ id: string; state: string; signals: string[]; tradelineIds: string[] }>; tradelines: Array<{ id: string }> }>(port, `/consumer/reports/${kickoff.body.reportId}/pending-matches`, sessionHeader)
+    assert.equal(pending.statusCode, 200)
+    assert.equal(pending.body.matches.length, 1)
+    assert.equal(pending.body.matches[0]?.state, 'split')
+    assert.ok(pending.body.matches[0]?.signals.includes('collision-set'))
+    assert.equal(pending.body.tradelines.length, 4, 'the pending set carries the detail needed to decide it')
+    const subgroup = await postJson<{ id: string; state: string; tradelineIds: string[] }>(port, `/consumer/matches/${pending.body.matches[0]?.id}/confirm-subgroup`, {
+      tradelineIds: pending.body.matches[0]?.tradelineIds.slice(0, 2) ?? [],
       reason: 'Consumer confirmed subgroup',
     }, sessionHeader)
     assert.equal(subgroup.statusCode, 201)

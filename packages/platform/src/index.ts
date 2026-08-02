@@ -1,9 +1,10 @@
 import { createHash, randomBytes, randomUUID, scryptSync, timingSafeEqual } from 'node:crypto'
 import { applicationVersion } from '../../domain/src/index.js'
-import { evaluateAnalysis, SEVERITY_RANK } from '../../analysis-core/src/index.js'
+import { evaluateAnalysis, SEVERITY_RANK, namesAgree, datesOfBirthAgree } from '../../analysis-core/src/index.js'
+import type { AttestedIdentity, EvaluableIdentityValue, ReportedIdentity } from '../../analysis-core/src/index.js'
 import { redactReportText } from '../../redaction/src/index.js'
 import { assertSafeConsumerOutput, type NarrationEvaluation } from '../../output-guard/src/index.js'
-import { parseIdentityIqPdfBytes } from '../../parser/src/index.js'
+import { parseIdentityIqPdfBytes, normalizeAddressForComparison } from '../../parser/src/index.js'
 import type { ParserReport, ParserValue } from '../../parser/src/index.js'
 import type { AccessibilityEvidenceReport } from '../../../apps/web/src/accessibility-report.js'
 import type { ComprehensionEvidenceReport } from '../../../apps/web/src/comprehension-report.js'
@@ -17,6 +18,8 @@ import type {
   PilotDrillResult, PilotDrill, PilotDrillEvidenceGap, PilotDrillEvidenceReport, PilotEvidenceSummary,
   PilotApprovalRecordFile, QualityLatencySummary, QualityFindingSummary, QualityMatchingSummary,
   QualityParserSummary, QualityReportSegment, QualityReport, ReportPresentationProfile, ReportRecipient, ReportAccountRow,
+  ConsumerIdentity, PostalAddress, ReportSummary, ReportIdentityRow, ReimportDiff, ReimportAccountRef,
+  ReportNegativeItemSummary, ReportUtilizationSummary, ReimportFieldChange, RuleAudit,
 } from './entities.js'
 
 export type {
@@ -28,6 +31,8 @@ export type {
   PilotDrillResult, PilotDrill, PilotDrillEvidenceGap, PilotDrillEvidenceReport, PilotEvidenceSummary,
   PilotApprovalRecordFile, QualityLatencySummary, QualityFindingSummary, QualityMatchingSummary,
   QualityParserSummary, QualityReportSegment, QualityReport, ReportPresentationProfile, ReportRecipient, ReportAccountRow,
+  ConsumerIdentity, PostalAddress, ReportSummary, ReportIdentityRow, ReimportDiff, ReimportAccountRef,
+  ReportNegativeItemSummary, ReportUtilizationSummary,
 }
 export type { Finding, FindingClassification, RuleAudit, SourceReference } from './entities.js'
 export type { PlatformStore, BlobStore } from './store.js'
@@ -42,6 +47,22 @@ export const AUTHORIZATION_TEXT = [
   '3. Return the Findings only to me — never to lenders, landlords, employers, insurers, brokers, attorneys, or credit-repair businesses.',
   '4. Refrain from selling, sharing, advertising against, or training models on my report data.',
   'This is a free pilot: no payment, no data sale, no advertising. This is educational information only, is not legal advice, and creates no attorney-client relationship.',
+].join('\n')
+
+/**
+ * Intake attestation. The consumer declares that the identity details they entered are their own
+ * and accurate. This is deliberately separate from AUTHORIZATION_TEXT (which governs what we may
+ * do with the report) and from Consent (which governs eligibility): it governs the accuracy of
+ * the reference values every identity comparison is measured against.
+ */
+export const IDENTITY_ATTESTATION_VERSION = 'identity-attestation-2026-08'
+export const IDENTITY_ATTESTATION_TEXT = [
+  'I declare the following about the identity details I have entered:',
+  '1. They are my own. I am not entering another person’s identity details.',
+  '2. They are accurate and complete to the best of my knowledge.',
+  '3. I understand this reading compares these details against what my report displays, and that a difference is an observation for me to verify — not a conclusion that anything is wrong.',
+  '4. I understand that entering inaccurate details will produce an inaccurate reading.',
+  'Only the last four digits of a Social Security number are ever requested. Do not enter a full Social Security number anywhere in this service.',
 ].join('\n')
 
 /** FCRA counsel Q-L4 (ticket 12): disclosed retention minimization. */
@@ -103,10 +124,87 @@ function validateReportPresentationProfile(input: Partial<ReportPresentationProf
 const hashPassword = (password: string, salt: string) => scryptSync(password, salt, 32).toString('hex')
 const maskAccount = (value: string) => `••••${value.replace(/\D/g, '').slice(-4)}`
 
+const US_STATE_CODE = /^[A-Z]{2}$/
+const POSTAL_CODE = /^\d{5}(-\d{4})?$/
+/** Latin letters (incl. accented), spaces, apostrophes, hyphens and periods. Digits are rejected —
+ *  a digit in a legal name is always a paste error or an address fragment in the wrong box. */
+const PERSON_NAME = /^[\p{L}][\p{L} '.-]{0,98}[\p{L}.]$/u
+
+function requireText(value: unknown, field: string, maxLength: number): string {
+  if (typeof value !== 'string') throw new Error(`${field} is required`)
+  const trimmed = value.trim().replace(/\s+/g, ' ')
+  if (!trimmed) throw new Error(`${field} is required`)
+  if (trimmed.length > maxLength) throw new Error(`${field} exceeds its allowed length`)
+  return trimmed
+}
+
+function validatePostalAddress(input: unknown, label: string): PostalAddress {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error(`${label} is required`)
+  const record = input as Record<string, unknown>
+  const line2Raw = record.line2 === undefined || record.line2 === null ? '' : requireText(record.line2, `${label} line 2`, 100)
+  // Validated for shape before length, so entering "California" reports the actual problem
+  // rather than an unhelpful "exceeds its allowed length".
+  const state = requireText(record.state, `${label} state`, 40).toUpperCase()
+  if (!US_STATE_CODE.test(state)) throw new Error(`${label} state must be a two-letter US state code`)
+  const postalCode = requireText(record.postalCode, `${label} ZIP code`, 10)
+  if (!POSTAL_CODE.test(postalCode)) throw new Error(`${label} ZIP code must be five digits, optionally with a four-digit extension`)
+  return {
+    line1: requireText(record.line1, `${label} street address`, 100),
+    ...(line2Raw ? { line2: line2Raw } : {}),
+    city: requireText(record.city, `${label} city`, 60),
+    state, postalCode,
+  }
+}
+
+/** Full-day age at `asOf`, computed on UTC calendar parts so a birthday is not gained or lost to
+ *  timezone offset or to leap-year arithmetic on a fractional-year approximation. */
+function ageInYears(dateOfBirth: string, asOf: Date): number {
+  const born = new Date(`${dateOfBirth}T00:00:00.000Z`)
+  let age = asOf.getUTCFullYear() - born.getUTCFullYear()
+  const monthDelta = asOf.getUTCMonth() - born.getUTCMonth()
+  if (monthDelta < 0 || (monthDelta === 0 && asOf.getUTCDate() < born.getUTCDate())) age -= 1
+  return age
+}
+
+function validateDateOfBirth(input: unknown): string {
+  const value = requireText(input, 'Date of birth', 10)
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) throw new Error('Date of birth must use the YYYY-MM-DD format')
+  const parsed = new Date(`${value}T00:00:00.000Z`)
+  if (Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== value) throw new Error('Date of birth is not a real calendar date')
+  const age = ageInYears(value, new Date())
+  // Mirrors the Consent adultUSConsumer acknowledgement: the pilot is adults-only, so an
+  // under-18 date of birth is a contradiction with an attestation already on record, not a typo
+  // to normalize away.
+  if (age < 18) throw new Error('This pilot is available to adults only')
+  if (age > 120) throw new Error('Date of birth is out of range')
+  return value
+}
+
+export function formatPostalAddress(address: PostalAddress): string {
+  return [address.line1, address.line2, `${address.city} ${address.state} ${address.postalCode}`].filter(Boolean).join(' ')
+}
+
+function validateSsnLastFour(input: unknown): string {
+  const value = requireText(input, 'Last four digits of your Social Security number', 12).replace(/[\s-]/g, '')
+  // A full or partial-but-longer number reaching this field is a data-entry hazard we refuse
+  // rather than silently truncate — truncating would store the fragment while having already
+  // accepted (and logged the shape of) more than we ever intend to hold.
+  if (value.length > 4) throw new Error('Enter only the last four digits of your Social Security number')
+  if (!/^\d{4}$/.test(value)) throw new Error('Last four digits must be exactly four digits')
+  if (value === '0000') throw new Error('Last four digits cannot be 0000')
+  return value
+}
+
+/** Long digit runs are masked in place rather than by collapsing the whole string to its last four
+ *  digits: identity findings put street addresses and dates into evidence, and the collapsing form
+ *  turned "123 MAIN ST SPRINGFIELD CA 90210" into "••••0210". The threshold sits above ZIP and
+ *  ZIP+4 segment lengths and below any real account-number length; a bare nine-digit run would
+ *  otherwise be rejected outright by the identifier guard that runs after this. */
+const EXPORT_DIGIT_RUN_MASK_THRESHOLD = 7
 function maskExportValue(value: unknown): unknown {
   if (typeof value === 'string') {
     const safe = value.replace(/No legal verdict/gi, 'No individual legal conclusion').replace(/legal violation/gi, 'legal conclusion')
-    return /\d{5,}/.test(safe) ? maskAccount(safe) : safe
+    return safe.replace(new RegExp(`\\d{${EXPORT_DIGIT_RUN_MASK_THRESHOLD},}`, 'g'), run => `••••${run.slice(-4)}`)
   }
   if (Array.isArray(value)) return value.map(maskExportValue)
   if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, maskExportValue(item)]))
@@ -150,6 +248,220 @@ function sourceLinkedInquiryRows(inquiries: Inquiry[]): ReportInquiryRow[] {
     if (inquiry.creditor.state !== 'known' || !inquiry.creditor.normalized || inquiry.date.state !== 'known' || !inquiry.date.normalized || !inquiry.creditor.source.locator) return []
     return [{ id: inquiry.id, bureau: inquiry.bureau, creditor: inquiry.creditor.originalDisplay || inquiry.creditor.normalized, ...(inquiry.businessType.state === 'known' && inquiry.businessType.normalized ? { businessType: inquiry.businessType.originalDisplay || inquiry.businessType.normalized } : {}), date: inquiry.date.normalized, source: { kind: inquiry.creditor.source.kind, locator: inquiry.creditor.source.locator } }]
   })
+}
+
+/**
+ * Groups per-bureau tradeline entries into logical accounts.
+ *
+ * Every count in the audit summary is per account, not per entry: one credit card furnished to
+ * three bureaus is one account, and reporting it as three would inflate every total on the
+ * summary by roughly 3x. Confirmed match groups define the grouping; an entry in no confirmed
+ * group is its own account, which is the conservative reading — it can only ever split an
+ * account apart, never merge two real accounts into one.
+ */
+function logicalAccounts(tradelines: Tradeline[], confirmedMatches: MatchGroup[]): Tradeline[][] {
+  const byId = new Map(tradelines.map(line => [line.id, line]))
+  const grouped: Tradeline[][] = []
+  const claimed = new Set<Id>()
+  for (const match of confirmedMatches) {
+    const lines = match.tradelineIds.map(id => byId.get(id)).filter((line): line is Tradeline => line !== undefined && !claimed.has(line.id))
+    if (lines.length === 0) continue
+    for (const line of lines) claimed.add(line.id)
+    grouped.push(lines)
+  }
+  for (const line of tradelines) if (!claimed.has(line.id)) grouped.push([line])
+  return grouped
+}
+
+const DEROGATORY_STATUS = /charge[\s-]?off|charged[\s-]?off|collection|repossess|foreclos|settled|derogatory|delinquen|default|past due|write[\s-]?off/i
+const COLLECTION_ACCOUNT = /collection/i
+const REVOLVING_ACCOUNT = /revolving|credit\s*card|charge\s*account/i
+
+function knownNumber(value: CanonicalValue<number>): number | null {
+  return value.state === 'known' && typeof value.normalized === 'number' ? value.normalized : null
+}
+function knownText(value: CanonicalValue<string>): string | null {
+  return value.state === 'known' && typeof value.normalized === 'string' && value.normalized ? value.normalized : null
+}
+
+/**
+ * The top-of-report audit summary.
+ *
+ * Where bureaus disagree on a money field for the same account, the highest reported value is
+ * used and the report says so. Averaging would invent a figure no bureau reported; taking the
+ * lowest would understate what a reader is actually being shown. None of these totals is a score
+ * input, a projection, or a claim that any entry is wrong.
+ */
+function buildReportSummary(args: {
+  report: CanonicalReport
+  confirmedMatches: MatchGroup[]
+  findings: ReportFinding[]
+}): ReportSummary {
+  const { report, confirmedMatches, findings } = args
+  const accounts = logicalAccounts([...report.tradelines, ...report.collections], confirmedMatches)
+  const accountsByBureau: Partial<Record<Bureau, number>> = {}
+  for (const line of report.tradelines) accountsByBureau[line.creditor.bureau] = (accountsByBureau[line.creditor.bureau] ?? 0) + 1
+
+  let openAccounts = 0, closedAccounts = 0
+  let collections = 0, pastDueAccounts = 0, derogatoryStatusAccounts = 0, statusUnavailable = 0, negativeTotal = 0
+  let totalBalanceCents = 0, totalPastDueCents = 0
+  let anyBalance = false, anyPastDue = false
+  let revolvingBalanceCents = 0, revolvingLimitCents = 0, revolvingCounted = 0, revolvingWithoutLimit = 0
+
+  for (const entries of accounts) {
+    const statuses = entries.map(line => knownText(line.status)).filter((value): value is string => value !== null)
+    const types = entries.map(line => knownText(line.accountType)).filter((value): value is string => value !== null)
+    const balances = entries.map(line => knownNumber(line.balance)).filter((value): value is number => value !== null)
+    const pastDues = entries.map(line => knownNumber(line.pastDue)).filter((value): value is number => value !== null)
+    const limits = entries.map(line => knownNumber(line.creditLimit)).filter((value): value is number => value !== null)
+
+    if (statuses.length === 0) statusUnavailable += 1
+    else if (statuses.some(status => /open|current/i.test(status))) openAccounts += 1
+    else if (statuses.some(status => /closed|paid/i.test(status))) closedAccounts += 1
+
+    if (balances.length > 0) { totalBalanceCents += Math.max(...balances); anyBalance = true }
+    if (pastDues.length > 0) { totalPastDueCents += Math.max(...pastDues); anyPastDue = true }
+
+    const isCollection = types.some(type => COLLECTION_ACCOUNT.test(type)) || statuses.some(status => COLLECTION_ACCOUNT.test(status))
+    const isPastDue = pastDues.some(value => value > 0)
+    const isDerogatory = statuses.some(status => DEROGATORY_STATUS.test(status))
+    if (isCollection) collections += 1
+    if (isPastDue) pastDueAccounts += 1
+    if (isDerogatory) derogatoryStatusAccounts += 1
+    if (isCollection || isPastDue || isDerogatory) negativeTotal += 1
+
+    if (types.some(type => REVOLVING_ACCOUNT.test(type))) {
+      if (limits.length > 0 && balances.length > 0) {
+        revolvingBalanceCents += Math.max(...balances)
+        revolvingLimitCents += Math.max(...limits)
+        revolvingCounted += 1
+      } else if (balances.length > 0) revolvingWithoutLimit += 1
+    }
+  }
+
+  const crossBureauInconsistencies = findings.filter(finding => /^The bureaus |^Bureau /.test(finding.title)).length
+  const identityObservations = findings.filter(finding => finding.evidence.some(item => item.subject === 'identity')).length
+
+  return {
+    accountsRead: accounts.length,
+    accountsByBureau,
+    openAccounts,
+    closedAccounts,
+    negativeItems: { total: negativeTotal, collections, pastDueAccounts, derogatoryStatusAccounts, statusUnavailable },
+    crossBureauInconsistencies,
+    identityObservations,
+    inquiriesRead: report.inquiries.length,
+    totalBalanceCents: anyBalance ? totalBalanceCents : null,
+    totalPastDueCents: anyPastDue ? totalPastDueCents : null,
+    utilization: {
+      revolvingBalanceCents, revolvingLimitCents,
+      ratio: revolvingCounted > 0 && revolvingLimitCents > 0 ? revolvingBalanceCents / revolvingLimitCents : null,
+      accountsCounted: revolvingCounted,
+      accountsWithoutLimit: revolvingWithoutLimit,
+    },
+  }
+}
+
+/** Personal-information entries as displayed, each labeled with whether it matched the identity
+ *  the consumer attested to. `not-compared` covers both "nothing attested" and "unreadable". */
+function buildIdentityRows(report: CanonicalReport, attested: AttestedIdentity | undefined): ReportIdentityRow[] {
+  const rows: ReportIdentityRow[] = []
+  const add = (value: CanonicalValue<string>, match: ReportIdentityRow['attestationMatch']) => {
+    if (!value.source.locator) return
+    rows.push({ id: value.id, bureau: value.bureau, field: value.field, value: value.originalDisplay || String(value.normalized ?? ''), attestationMatch: match, source: { kind: value.source.kind, locator: value.source.locator } })
+  }
+  const stringValues = (values: CanonicalValue<unknown>[]) => values.filter((value): value is CanonicalValue<string> => typeof value.normalized !== 'number')
+  for (const value of stringValues(report.identity)) {
+    const normalized = knownText(value)
+    if (!attested || normalized === null) { add(value, 'not-compared'); continue }
+    if (value.field === 'name') add(value, namesAgree(attested.fullName, normalized) ? 'matches-attested' : 'differs-from-attested')
+    else if (value.field === 'dateOfBirth') add(value, datesOfBirthAgree(attested.dateOfBirth, normalized) ? 'matches-attested' : 'differs-from-attested')
+    else if (value.field === 'ssnLastFour') add(value, normalized === attested.ssnLastFour ? 'matches-attested' : 'differs-from-attested')
+    else add(value, 'not-compared')
+  }
+  for (const value of stringValues(report.addresses)) {
+    const normalized = knownText(value)
+    if (!attested || normalized === null) { add(value, 'not-compared'); continue }
+    add(value, attested.addressKeys.includes(normalizeAddressForComparison(normalized)) ? 'matches-attested' : 'differs-from-attested')
+  }
+  for (const value of stringValues(report.employers)) add(value, 'not-compared')
+  return rows
+}
+
+const REIMPORT_TRACKED_FIELDS: ReadonlyArray<{ key: 'balance' | 'creditLimit' | 'pastDue'; label: string } | { key: 'status' | 'opened' | 'updated' | 'dateOfFirstDelinquency'; label: string }> = [
+  { key: 'balance', label: 'Balance' },
+  { key: 'creditLimit', label: 'Credit limit / high credit' },
+  { key: 'pastDue', label: 'Past due' },
+  { key: 'status', label: 'Status' },
+  { key: 'opened', label: 'Date opened' },
+  { key: 'updated', label: 'Last reported' },
+  { key: 'dateOfFirstDelinquency', label: 'Date of first delinquency' },
+]
+
+const accountKey = (line: Tradeline): string => `${(knownText(line.creditor) ?? '').toLowerCase()}|${knownText(line.maskedAccount) ?? ''}|${line.creditor.bureau}`
+const accountRef = (line: Tradeline): ReimportAccountRef => ({ creditor: knownText(line.creditor) ?? 'Unknown creditor', bureau: line.creditor.bureau, maskedAccount: knownText(line.maskedAccount) ?? '' })
+
+function displayFieldValue(line: Tradeline, key: (typeof REIMPORT_TRACKED_FIELDS)[number]['key']): string | null {
+  const value = line[key]
+  if (value.state !== 'known' || value.normalized === null) return null
+  if (typeof value.normalized === 'number') return (value.normalized / 100).toLocaleString('en-US', { style: 'currency', currency: 'USD' })
+  return String(value.normalized)
+}
+
+/**
+ * Diffs this reading against the consumer's previous one.
+ *
+ * Only fields readable in BOTH reports are compared. A field the parser read last time and could
+ * not read this time is not a change in the report — it is a change in what we could see — and
+ * presenting it as "Status: Open → (missing)" would report our own extraction gap as movement in
+ * the consumer's credit file.
+ */
+function buildReimportDiff(args: {
+  previousConsumerReport: ConsumerReport
+  previousReport: CanonicalReport
+  currentReport: CanonicalReport
+  currentFindings: ReportFinding[]
+}): ReimportDiff {
+  const { previousConsumerReport, previousReport, currentReport, currentFindings } = args
+  const previousLines = new Map(previousReport.tradelines.map(line => [accountKey(line), line]))
+  const currentLines = new Map(currentReport.tradelines.map(line => [accountKey(line), line]))
+
+  const newAccounts: ReimportAccountRef[] = []
+  const changedAccounts: Array<ReimportAccountRef & { changes: ReimportFieldChange[] }> = []
+  for (const [key, line] of currentLines) {
+    const previous = previousLines.get(key)
+    if (!previous) { newAccounts.push(accountRef(line)); continue }
+    const changes: ReimportFieldChange[] = []
+    for (const { key: field, label } of REIMPORT_TRACKED_FIELDS) {
+      const from = displayFieldValue(previous, field)
+      const to = displayFieldValue(line, field)
+      if (from === null || to === null || from === to) continue
+      changes.push({ field: label, from, to })
+    }
+    if (changes.length > 0) changedAccounts.push({ ...accountRef(line), changes })
+  }
+  const removedAccounts = [...previousLines].filter(([key]) => !currentLines.has(key)).map(([, line]) => accountRef(line))
+
+  const previousScores = new Map(previousReport.scores.filter(score => score.state === 'known' && score.normalized !== null).map(score => [score.bureau, score.normalized as number]))
+  const scoreChanges = currentReport.scores.flatMap(score => {
+    if (score.state !== 'known' || score.normalized === null) return []
+    const from = previousScores.get(score.bureau)
+    if (from === undefined || from === score.normalized) return []
+    return [{ bureau: score.bureau, from, to: score.normalized, delta: score.normalized - from }]
+  })
+
+  // Findings carry a fresh id per run, so they are compared by title — the stable, human-readable
+  // identity of what was observed.
+  const previousTitles = new Set(previousConsumerReport.findings.map(finding => finding.title))
+  const currentTitles = new Set(currentFindings.map(finding => finding.title))
+  return {
+    previousConsumerReportId: previousConsumerReport.id,
+    previousGeneratedAt: previousConsumerReport.generatedAt,
+    newAccounts, removedAccounts, changedAccounts, scoreChanges,
+    findingsResolved: [...previousTitles].filter(title => !currentTitles.has(title)),
+    findingsNew: [...currentTitles].filter(title => !previousTitles.has(title)),
+    findingsUnchanged: [...currentTitles].filter(title => previousTitles.has(title)).length,
+  }
 }
 
 function exportProjection(report: ConsumerReport) {
@@ -335,27 +647,83 @@ export class CreditAnalysisPlatform {
     if (!record) throw new Error('No written authorization on record')
     return structuredClone(record)
   }
+
+  // ------------------------------------------------------------------
+  // Attested identity (intake)
+  // ------------------------------------------------------------------
+
+  /**
+   * Records the consumer's own identity details plus the accuracy attestation.
+   *
+   * Re-submitting replaces the record and re-stamps the attestation: identity legitimately
+   * changes (marriage, a move), and a stale reference set would produce variance Findings that
+   * are artifacts of our own storage rather than of the report.
+   */
+  async recordConsumerIdentity(sessionId: Id, input: {
+    fullName: unknown; dateOfBirth: unknown; ssnLastFour: unknown
+    currentAddress: unknown; previousAddresses?: unknown
+    attestationVersion?: unknown; accurateAndComplete?: unknown
+  }): Promise<ConsumerIdentity> {
+    const userId = await this.requireSession(sessionId)
+    if (input.accurateAndComplete !== true) throw new Error('The accuracy declaration must be affirmatively accepted')
+    if (input.attestationVersion !== undefined && input.attestationVersion !== IDENTITY_ATTESTATION_VERSION) throw new Error('The current accuracy declaration must be accepted')
+    const fullName = requireText(input.fullName, 'Full name', 100)
+    if (!PERSON_NAME.test(fullName)) throw new Error('Full name may contain only letters, spaces, apostrophes, hyphens, and periods')
+    if (!/\p{L}[\p{L}'.-]*\s+\p{L}/u.test(fullName)) throw new Error('Enter your full name as it appears on your report, including a last name')
+    const previousRaw = input.previousAddresses ?? []
+    if (!Array.isArray(previousRaw)) throw new Error('Previous addresses must be a list')
+    if (previousRaw.length > 10) throw new Error('Enter at most ten previous addresses')
+    const identity: ConsumerIdentity = {
+      userId, fullName,
+      dateOfBirth: validateDateOfBirth(input.dateOfBirth),
+      ssnLastFour: validateSsnLastFour(input.ssnLastFour),
+      currentAddress: validatePostalAddress(input.currentAddress, 'Current address'),
+      previousAddresses: previousRaw.map((address, index) => validatePostalAddress(address, `Previous address ${index + 1}`)),
+      attestationVersion: IDENTITY_ATTESTATION_VERSION,
+      attestedAt: now(),
+    }
+    await this.store.saveConsumerIdentity(identity)
+    // Audit metadata deliberately carries no identity value — only that an attestation happened.
+    await this.audit('consumer-identity-attested', userId, userId, { attestationVersion: identity.attestationVersion, previousAddressCount: String(identity.previousAddresses.length) })
+    return structuredClone(identity)
+  }
+
+  async getConsumerIdentity(sessionId: Id): Promise<ConsumerIdentity | undefined> {
+    const userId = await this.requireSession(sessionId)
+    const identity = await this.store.getConsumerIdentity(userId)
+    return identity ? structuredClone(identity) : undefined
+  }
+
   getRetentionPolicy(): typeof RETENTION_POLICY { return RETENTION_POLICY }
-  getDisclosure() { return { authorizationVersion: AUTHORIZATION_VERSION, authorizationText: AUTHORIZATION_TEXT, retentionPolicy: RETENTION_POLICY } }
+  getDisclosure() { return { authorizationVersion: AUTHORIZATION_VERSION, authorizationText: AUTHORIZATION_TEXT, retentionPolicy: RETENTION_POLICY, identityAttestationVersion: IDENTITY_ATTESTATION_VERSION, identityAttestationText: IDENTITY_ATTESTATION_TEXT } }
   async getConsumerDashboard(sessionId: Id) {
     const userId = await this.requireSession(sessionId)
     const user = await this.store.getUserById(userId); if (!user) throw new Error('Not found')
     const workspaces = await this.store.listWorkspacesForUser(userId)
     const reports = await this.store.listConsumerReportsForUser(userId)
+    // A parsed report with no delivered reading is now only possible when analysis failed part-way
+    // (it is no longer a normal resting state — kickoff parses, matches, analyzes, and delivers in
+    // one call). Surfacing it lets the consumer resume instead of re-uploading the same document.
     const pending = (await this.store.listReportsForUser(userId)).reverse()
+    const analyzedReportIds = new Set((await this.store.listAnalysesForUser(userId)).map(analysis => analysis.reportId))
     const pendingReview = await (async () => {
       for (const candidate of pending) {
-        if (!candidate.reviewComplete) {
-          const review = await this.getValueReview(sessionId, candidate.id)
-          return { status: 'value-review-required' as const, reportId: candidate.id, required: review.required, decided: review.decided }
-        }
+        if (analyzedReportIds.has(candidate.id)) continue
         const matches = await this.store.listMatchesByReport(candidate.id)
         const unresolved = matches.filter(match => match.state !== 'confirmed' && match.state !== 'rejected')
-        if (unresolved.length > 0) return { status: 'match-review-required' as const, reportId: candidate.id, matches: unresolved, tradelines: reviewedReportProjection(candidate).tradelines.map(line => ({ id: line.id, bureau: String(line.creditor.bureau), creditor: line.creditor.normalized ?? '', maskedAccount: line.maskedAccount.normalized ?? '', balanceCents: line.balance.normalized ?? null })) }
+        return {
+          status: 'match-review-required' as const, reportId: candidate.id, matches: unresolved,
+          tradelines: reviewedReportProjection(candidate).tradelines.map(line => ({ id: line.id, bureau: String(line.creditor.bureau), creditor: line.creditor.normalized ?? '', maskedAccount: line.maskedAccount.normalized ?? '', balanceCents: line.balance.normalized ?? null })),
+        }
       }
       return null
     })()
-    return { email: user.email, workspaceId: workspaces[0]?.id ?? null, consent: !!user.consent, authorization: !!(await this.store.getAuthorizationByUser(userId)), pendingReview, reports: await Promise.all(reports.map(async report => ({ id: report.id, generatedAt: report.generatedAt, findingCount: report.findings.length, parserVersion: report.content?.parserVersion ?? 'legacy', exportId: (await this.store.findExportByReport(userId, report.id))?.id ?? null }))) }
+    return {
+      email: user.email, workspaceId: workspaces[0]?.id ?? null,
+      identity: !!(await this.store.getConsumerIdentity(userId)),
+      consent: !!user.consent, authorization: !!(await this.store.getAuthorizationByUser(userId)), pendingReview,
+      reports: await Promise.all(reports.map(async report => ({ id: report.id, generatedAt: report.generatedAt, findingCount: report.findings.length, parserVersion: report.content?.parserVersion ?? 'legacy', exportId: (await this.store.findExportByReport(userId, report.id))?.id ?? null }))),
+    }
   }
   private async requireAuthorization(userId: Id): Promise<void> {
     if (!(await this.store.getAuthorizationByUser(userId))) throw new Error('Written authorization required before processing')
@@ -428,6 +796,10 @@ export class CreditAnalysisPlatform {
     const workspace = await this.getWorkspace(sessionId, workspaceId)
     const user = await this.store.getUserById(userId)
     if (!user?.consent) throw new Error('Consent gate incomplete')
+    // Identity is required before, not after, a report is read: the reference set has to exist at
+    // analysis time or the identity checks silently skip, and a consumer who supplied it only
+    // afterwards would get a reading that quietly covered less than the next person's.
+    if (!(await this.store.getConsumerIdentity(userId))) throw new Error('Identity details and the accuracy declaration are required before uploading a report')
     const upload: Upload = { id: randomUUID(), userId, workspaceId: workspace.id, token: randomBytes(24).toString('base64url'), tokenExpiresAt: new Date(Date.now() + ttlMs).toISOString(), stage: 'initialized' }
     await this.store.saveUpload(upload)
     return structuredClone(upload)
@@ -516,14 +888,27 @@ export class CreditAnalysisPlatform {
     return { reportId, required: values.length, decided, complete: report.reviewComplete, values }
   }
 
+  /**
+   * Records a consumer correction to an extraction exception.
+   *
+   * Available at any time, including after a reading has been delivered — a correction is new
+   * information about the source document, and there is no point at which learning the parser
+   * misread something should stop mattering. Re-running analysis afterwards produces a fresh
+   * reading; the prior one is left intact rather than rewritten.
+   */
   async reviewValue(sessionId: Id, reportId: Id, valueId: Id, input: { decision: import('./entities.js').ReviewDecision; reason: string; replacement?: string | number }): Promise<CanonicalReport> {
     const userId = await this.requireSession(sessionId)
     const report = await this.store.getReport(reportId); if (!report || report.userId !== userId) throw new Error('Not found')
-    if (report.reviewComplete) throw new Error('Report review is already complete')
-    const value = reviewableValues(report).find(item => item.id === valueId); if (!value) throw new Error('Value is not reviewable')
+    const value = correctableValues(report).find(item => item.id === valueId); if (!value) throw new Error('Value is not reviewable')
     if (!input.reason.trim()) throw new Error('A review reason is required')
     if (input.decision === 'corrected') {
-      if (input.replacement === undefined || typeof input.replacement !== typeof value.normalized || (typeof input.replacement === 'string' && !input.replacement.trim())) throw new Error('Correction must match the extracted value type')
+      if (input.replacement === undefined || (typeof input.replacement === 'string' && !input.replacement.trim())) throw new Error('Correction must supply a replacement value')
+      // The value the parser could not read at all is precisely where a consumer's answer is most
+      // useful, so a null reading cannot supply the expected type. Fall back to the slot's own
+      // shape: money fields carry a currency, everything else is text.
+      const expected = value.normalized === null ? (value.currency ? 'number' : 'string') : typeof value.normalized
+      if (typeof input.replacement !== expected) throw new Error('Correction must match the extracted value type')
+      if (typeof input.replacement === 'number' && !Number.isFinite(input.replacement)) throw new Error('Correction must be a finite number')
     } else if (input.replacement !== undefined) throw new Error('Only corrected values may include a replacement')
     value.review = { decision: input.decision, reason: input.reason.trim(), actorId: userId, at: now(), ...(input.replacement !== undefined ? { replacement: input.replacement } : {}) }
     report.normalizedVersion += 1
@@ -531,16 +916,20 @@ export class CreditAnalysisPlatform {
     await this.audit('report-value-reviewed', userId, valueId, { decision: input.decision })
     return structuredClone(report)
   }
+  /**
+   * Marks the optional correction pass finished. It does not gate anything and never rejects
+   * outstanding exceptions: an exception the consumer chose not to answer stays low-confidence,
+   * which suppresses the rules that depend on it — the same outcome as before they looked at it.
+   */
   async completeReview(sessionId: Id, reportId: Id): Promise<void> {
     const userId = await this.requireSession(sessionId)
     const report = await this.store.getReport(reportId); if (!report || report.userId !== userId) throw new Error('Not found')
-    if (report.reviewComplete) throw new Error('Report review is already complete')
-    const missing = reviewableValues(report).filter(value => !value.review)
-    if (missing.length > 0) throw new Error(`Review requires decisions for ${missing.length} remaining value${missing.length === 1 ? '' : 's'}`)
+    if (report.reviewComplete) return
     report.reviewComplete = true
     report.reviewCompletedAt = now()
     await this.store.saveReport(report)
-    await this.audit('report-review-completed', userId, report.id, { reviewedValues: String(reviewableValues(report).length) })
+    const exceptions = reviewableValues(report)
+    await this.audit('report-review-completed', userId, report.id, { exceptions: String(exceptions.length), corrected: String(exceptions.filter(value => value.review).length) })
   }
 
   /** REAL IdentityIQ PDF path: bytes → pdfjs (unpdf) → parser → canonical report. No child_process, no native binary — Workers-safe. */
@@ -638,21 +1027,57 @@ export class CreditAnalysisPlatform {
       const balanceAgreement = new Set(lines.map(line => line.balance.normalized)).size === 1
       const oversized = lines.length > 3
       const duplicateWithinBureau = uniqueBureaus.size < lines.length
-      const confidence = oversized || duplicateWithinBureau ? 0.72 : (balanceAgreement ? 0.95 : 0.72)
+      // A masked account that is pure mask characters carries no identifying digits, so the group
+      // is really a creditor-name match and cannot be trusted on its own.
+      const account = lines[0]?.maskedAccount.normalized ?? ''
+      const accountIdentified = account !== '' && !/^[•*x]+$/i.test(account)
+      // Balance agreement is recorded as a signal but is deliberately NOT part of the confidence
+      // decision. Two bureaus showing the same creditor, the same masked account, and one entry
+      // each are the same account whether or not their balances agree — and a *disagreeing*
+      // balance is the flagship finding this product exists to surface. Gating the match on
+      // agreement meant every account worth reporting on required a manual confirmation first.
+      const ambiguous = oversized || duplicateWithinBureau || !accountIdentified
+      const confidence = ambiguous ? 0.72 : 0.95
+      // An unambiguous group — same creditor, same masked account, agreeing balances, one line per
+      // bureau — is not a question a consumer can answer better than the evidence already does.
+      // Asking anyway is the pattern that produced a wall of forced decisions; the ambiguous cases
+      // below are the ones where a human genuinely knows something the document does not say.
+      const autoConfirmed = !ambiguous
       const group: MatchGroup = {
         id: randomUUID(),
         reportId,
         tradelineIds: lines.map(line => line.id),
         confidence,
-        signals: ['creditor', 'masked-account', ...(balanceAgreement ? ['balance'] : []), ...(oversized ? ['collision-set'] : []), ...(duplicateWithinBureau ? ['same-bureau-duplicate'] : [])],
-        state: oversized || duplicateWithinBureau ? 'split' : confidence >= 0.9 ? 'proposed' : 'split',
-        history: [],
+        signals: ['creditor', 'masked-account', ...(balanceAgreement ? ['balance'] : []), ...(oversized ? ['collision-set'] : []), ...(duplicateWithinBureau ? ['same-bureau-duplicate'] : []), ...(accountIdentified ? [] : ['creditor-only']), ...(autoConfirmed ? ['auto-confirmed'] : [])],
+        state: autoConfirmed ? 'confirmed' : 'split',
+        history: autoConfirmed ? [{ action: 'confirmed' as const, actorId: 'system', at: now(), reason: 'Same creditor and masked account, one entry per bureau, no collision — matched without ambiguity' }] : [],
       }
       await this.store.saveMatch(group)
       result.push(group)
     }
     return structuredClone(result)
   }
+  /**
+   * The account groups still awaiting a consumer decision, with enough tradeline detail to decide.
+   *
+   * Reachable after the reading is delivered, because unresolved groups no longer block delivery —
+   * they suppress the checks that needed them. This is how a consumer goes back and unlocks those
+   * checks without re-uploading the document.
+   */
+  async listPendingMatches(sessionId: Id, reportId: Id): Promise<{ reportId: Id; matches: MatchGroup[]; tradelines: Array<{ id: Id; bureau: string; creditor: string; maskedAccount: string; balanceCents: number | null }> }> {
+    const userId = await this.requireSession(sessionId)
+    const report = await this.store.getReport(reportId); if (!report || report.userId !== userId) throw new Error('Not found')
+    const matches = (await this.store.listMatchesByReport(reportId)).filter(match => match.state === 'proposed' || match.state === 'split')
+    const involved = new Set(matches.flatMap(match => match.tradelineIds))
+    return {
+      reportId,
+      matches: structuredClone(matches),
+      tradelines: reviewedReportProjection(report).tradelines
+        .filter(line => involved.has(line.id))
+        .map(line => ({ id: line.id, bureau: String(line.creditor.bureau), creditor: line.creditor.normalized ?? '', maskedAccount: line.maskedAccount.normalized ?? '', balanceCents: line.balance.normalized ?? null })),
+    }
+  }
+
   async decideMatch(sessionId: Id, matchId: Id, action: 'confirmed' | 'rejected' | 'split' | 'merged', reason: string): Promise<MatchGroup> {
     const userId = await this.requireSession(sessionId)
     const match = await this.store.getMatch(matchId)
@@ -698,20 +1123,66 @@ export class CreditAnalysisPlatform {
   async runAnalysis(sessionId: Id, reportId: Id, rulesetVersion: string, jurisdiction: Jurisdiction): Promise<Analysis> {
     const userId = await this.requireSession(sessionId)
     const report = await this.store.getReport(reportId); if (!report || report.userId !== userId) throw new Error('Not found')
-    if (!report.reviewComplete) throw new Error('Report review is incomplete')
     const matches = await this.store.listMatchesByReport(reportId)
+    // An unresolved collision set suppresses the checks that would have used it; it does not
+    // withhold the whole reading. Suppression is already how this engine handles evidence it
+    // cannot stand behind, and a consumer with one ambiguous account group should still get the
+    // other twenty-nine accounts read. The suppressed checks are named in the coverage table.
     const unresolvedMatches = matches.filter(match => match.state === 'proposed' || match.state === 'split')
-    if (unresolvedMatches.length) throw new Error('Account matching confirmation is incomplete')
     const rules = this.publishedRulesets.get(rulesetVersion); if (!rules) throw new Error('Ruleset not found')
     if (rules.some(rule => rule.status === 'disabled' || rule.authorityIds.some(id => this.authorities.get(id)?.status === 'disabled') || rule.educationModuleIds.some(id => this.modules.get(id)?.status === 'disabled'))) throw new Error('Ruleset contains disabled content')
     const reviewedReport = reviewedReportProjection(report)
-    const core = evaluateAnalysis({ rules, tradelines: reviewedReport.tradelines, confirmedMatches: matches.filter(match => match.state === 'confirmed').map(match => ({ tradelineIds: match.tradelineIds })), versions: { normalizedInput: report.normalizedVersion, ruleset: rulesetVersion, jurisdiction, parser: report.parserVersion, application: applicationVersion } })
+    const core = evaluateAnalysis({
+      rules,
+      tradelines: reviewedReport.tradelines,
+      confirmedMatches: matches.filter(match => match.state === 'confirmed').map(match => ({ tradelineIds: match.tradelineIds })),
+      ...(await this.identityInputForAnalysis(userId, reviewedReport)),
+      versions: { normalizedInput: report.normalizedVersion, ruleset: rulesetVersion, jurisdiction, parser: report.parserVersion, application: applicationVersion },
+    })
+    const unresolvedAudit: RuleAudit[] = unresolvedMatches.length === 0 ? [] : rules
+      .filter(rule => rule.name.startsWith('cross-bureau-') || rule.name === 'duplicate-tradeline-within-bureau')
+      .map(rule => ({ ruleId: rule.id, outcome: 'suppressed' as const, reason: `${unresolvedMatches.length} account group${unresolvedMatches.length === 1 ? '' : 's'} await your confirmation; this check did not run on ${unresolvedMatches.length === 1 ? 'it' : 'them'}` }))
     const parsedAt = this.timelineBySubject.get(report.id)?.reportParsedAt
-    const analysis: Analysis = { ...core, userId, reportId }
+    const analysis: Analysis = { ...core, audit: [...core.audit, ...unresolvedAudit], userId, reportId }
     await this.store.saveAnalysis(analysis)
     this.recordTimestamp(analysis.id, { analysisCreatedAt: analysis.createdAt, ...(parsedAt ? { reportParsedAt: parsedAt } : {}) })
     await this.audit('analysis-created', userId, analysis.id, { rulesetVersion })
     return structuredClone(analysis)
+  }
+
+  /**
+   * Assembles the identity comparison inputs for one analysis run.
+   *
+   * Returns an empty object — not a partial one — when no attestation exists. The identity rules
+   * then suppress with an explicit reason instead of comparing against blanks, which would make
+   * every displayed value look like a mismatch.
+   */
+  private async identityInputForAnalysis(userId: Id, report: CanonicalReport): Promise<{ attestedIdentity?: AttestedIdentity; reportedIdentity?: ReportedIdentity }> {
+    const stored = await this.store.getConsumerIdentity(userId)
+    const toEvaluable = (value: CanonicalValue<string>): EvaluableIdentityValue => ({
+      id: value.id, bureau: value.bureau, field: value.field,
+      normalized: value.normalized, originalDisplay: value.originalDisplay,
+      confidence: value.confidence, source: value.source,
+    })
+    const identityByField = (field: string) => report.identity.filter((value): value is CanonicalValue<string> => value.field === field && typeof value.normalized !== 'number').map(toEvaluable)
+    const reportedIdentity: ReportedIdentity = {
+      names: identityByField('name'),
+      datesOfBirth: identityByField('dateOfBirth'),
+      ssnFragments: identityByField('ssnLastFour'),
+      addresses: report.addresses
+        .filter((value): value is CanonicalValue<string> => typeof value.normalized !== 'number')
+        .map(value => ({ ...toEvaluable(value), comparisonKey: normalizeAddressForComparison(value.normalized ?? '') })),
+    }
+    if (!stored) return { reportedIdentity }
+    return {
+      attestedIdentity: {
+        fullName: stored.fullName,
+        dateOfBirth: stored.dateOfBirth,
+        ssnLastFour: stored.ssnLastFour,
+        addressKeys: [stored.currentAddress, ...stored.previousAddresses].map(address => normalizeAddressForComparison(formatPostalAddress(address))),
+      },
+      reportedIdentity,
+    }
   }
 
   async getAnalysis(sessionId: Id, analysisId: Id): Promise<Analysis> {
@@ -775,9 +1246,19 @@ export class CreditAnalysisPlatform {
     })
     addParserField('score', reviewedReport.scores.flatMap(score => [score, score.scale]))
     addParserField('inquiry', reviewedReport.inquiries.flatMap(inquiry => [inquiry.creditor, inquiry.date]))
+    addParserField('personalInformation', [...reviewedReport.identity, ...reviewedReport.addresses, ...reviewedReport.employers])
     const recipient = displayRecipient(reviewedReport)
+
+    const matches = await this.store.listMatchesByReport(analysis.reportId)
+    const confirmedMatches = matches.filter(match => match.state === 'confirmed')
+    const pendingMatchGroups = matches.filter(match => match.state === 'proposed' || match.state === 'split').length
+    const { attestedIdentity } = await this.identityInputForAnalysis(userId, reviewedReport)
+    const scoreRows = sourceLinkedScoreRows(reviewedReport.scores)
+    const summary = buildReportSummary({ report: reviewedReport, confirmedMatches, findings })
+    const identityRows = buildIdentityRows(reviewedReport, attestedIdentity)
+    const reimport = await this.previousReadingFor(userId, analysis.reportId, reviewedReport, findings)
     const consumerReport: ConsumerReport = {
-      id: randomUUID(), userId, analysisId,
+      id: randomUUID(), userId, analysisId, sourceReportId: analysis.reportId,
       limitations: ['Educational information only', 'No legal verdict; no deletion promise or score prediction'],
       overview: { tradelines: reviewedReport.tradelines.length, collections: reviewedReport.collections.length, inquiries: reviewedReport.inquiries.length, openAccounts: reviewedReport.tradelines.filter(line => line.status.normalized?.toLowerCase().includes('open')).length },
       findings,
@@ -789,8 +1270,12 @@ export class CreditAnalysisPlatform {
         sectionPrimers,
         coverage,
         parserFields,
+        summary,
+        ...(identityRows.length > 0 ? { identityRows } : {}),
+        ...(reimport ? { reimport } : {}),
+        ...(pendingMatchGroups > 0 ? { pendingMatchGroups } : {}),
         accountRows: sourceLinkedAccountRows(reviewedReport.tradelines),
-        ...(sourceLinkedScoreRows(reviewedReport.scores).length > 0 ? { scoreRows: sourceLinkedScoreRows(reviewedReport.scores) } : {}),
+        ...(scoreRows.length > 0 ? { scoreRows } : {}),
         ...(sourceLinkedInquiryRows(reviewedReport.inquiries).length > 0 ? { inquiryRows: sourceLinkedInquiryRows(reviewedReport.inquiries) } : {}),
       },
       presentation: presentationSnapshot(await this.store.getReportPresentationProfile()),
@@ -800,6 +1285,21 @@ export class CreditAnalysisPlatform {
     await this.store.saveConsumerReport(consumerReport)
     return structuredClone(consumerReport)
   }
+  /** Resolves the reading immediately before this one and diffs against it. Returns undefined on
+   *  a first upload, or when the previous reading's source report is no longer retrievable —
+   *  retention deletes source reports on a schedule, and a partial diff would be worse than none. */
+  private async previousReadingFor(userId: Id, currentReportId: Id, currentReport: CanonicalReport, currentFindings: ReportFinding[]): Promise<ReimportDiff | undefined> {
+    const previousConsumerReport = (await this.store.listConsumerReportsForUser(userId))
+      .sort((a, b) => Date.parse(b.generatedAt) - Date.parse(a.generatedAt))
+      .find(candidate => candidate.id !== currentReportId)
+    if (!previousConsumerReport) return undefined
+    const previousAnalysis = await this.store.getAnalysis(previousConsumerReport.analysisId)
+    if (!previousAnalysis || previousAnalysis.reportId === currentReportId) return undefined
+    const previousReport = await this.store.getReport(previousAnalysis.reportId)
+    if (!previousReport) return undefined
+    return buildReimportDiff({ previousConsumerReport, previousReport, currentReport, currentFindings })
+  }
+
   async getConsumerReport(sessionId: Id, consumerReportId: Id): Promise<ConsumerReport> {
     const userId = await this.requireSession(sessionId)
     const report = await this.store.getConsumerReport(consumerReportId); if (!report || report.userId !== userId) throw new Error('Not found')
@@ -1154,10 +1654,23 @@ function mapParserReportToCanonical(pr: ParserReport, userId: Id, uploadId: Id):
         specialCommentCodes: t.specialCommentCodes.map(value => toCanonical(value)),
       })
     })
-  const parserIdentity = pr.identity.map(value => toCanonical(value))
+  const personal = pr.personalInformation
+  const bureauScoped = (values: ParserValue<string>[]) => values.filter(value => value.bureau !== 'unknown').map(value => toCanonical(value))
+  // Names, dates of birth, and SSN fragments all live in `identity` and are told apart by `field`.
+  // Keeping them in one array means allValues() reaches them for review/projection without a
+  // parallel traversal per identity kind, and the field name is what every consumer already keys on.
+  const parserIdentity = [
+    ...pr.identity.map(value => toCanonical(value)),
+    ...bureauScoped(personal.names),
+    ...bureauScoped(personal.alsoKnownAs),
+    ...bureauScoped(personal.datesOfBirth),
+    ...bureauScoped(personal.socialSecurityFragments),
+  ]
+  const addresses = [...bureauScoped(personal.currentAddresses), ...bureauScoped(personal.previousAddresses)]
+  const employers = bureauScoped(personal.employers)
   const inquiries = pr.inquiries.map((inquiry): Inquiry => ({ id: randomUUID(), bureau: inquiry.bureau as Bureau, creditor: toCanonical(inquiry.creditor), businessType: toCanonical(inquiry.businessType), date: toCanonical(inquiry.date) }))
   const scores = pr.scores.map((score): CanonicalScore => ({ ...toCanonical(score.score), scale: toCanonical(score.scale) }))
-  return { id: randomUUID(), userId, uploadId, provider: pr.provider, template: pr.template, parserVersion, normalizedVersion: 1, reportDate: pr.reportDate ?? '', identity: parserIdentity, addresses: [], employers: [], tradelines, collections: [], inquiries, publicRecords: [], scores, remarks: [], reviewComplete: false }
+  return { id: randomUUID(), userId, uploadId, provider: pr.provider, template: pr.template, parserVersion, normalizedVersion: 1, reportDate: pr.reportDate ?? '', identity: parserIdentity, addresses, employers, tradelines, collections: [], inquiries, publicRecords: [], scores, remarks: [], reviewComplete: false }
 }
 function displayRecipient(report: CanonicalReport): ReportRecipient | undefined {
   const candidate = report.identity.find(value => value.field === 'consumer-display-name' && value.state === 'known' && value.normalized && value.confidence >= 0.95)
@@ -1166,10 +1679,42 @@ function displayRecipient(report: CanonicalReport): ReportRecipient | undefined 
 
 function allValues(report: CanonicalReport): CanonicalValue<unknown>[] { const direct: CanonicalValue<unknown>[] = [...report.identity, ...report.addresses, ...report.employers, ...report.inquiries.flatMap(inquiry => [inquiry.creditor, inquiry.businessType, inquiry.date]), ...report.publicRecords, ...report.scores.flatMap(score => [score, score.scale]), ...report.remarks]; for (const line of [...report.tradelines, ...report.collections]) direct.push(line.creditor, line.maskedAccount, line.accountType, line.balance, line.creditLimit, line.pastDue, line.status, line.opened, line.updated, line.dateOfFirstDelinquency, ...line.paymentHistory, ...line.remarks, ...line.specialCommentCodes); return direct }
 
-/** Only values that could be shown or supply current rules require a consumer disposition. Unknown
- * parser output stays unavailable rather than forcing the consumer to endorse an absent value. */
+/** The publishable-confidence floor. Every catalog rule sets minimumConfidence at or above this,
+ *  so a value below it can never reach a Finding — it suppresses instead. */
+export const PUBLISHABLE_CONFIDENCE = 0.9
+
+/**
+ * Extraction exceptions the consumer may optionally correct: values this parser failed on, or
+ * read below the publishable floor.
+ *
+ * Deliberately NOT every extracted value. A confidently-read value has nothing to ask about —
+ * requiring the consumer to endorse it would make them the parser's QA department, would turn a
+ * tri-bureau report into thousands of forced decisions, and would launder parser error into
+ * consumer-attested data. Values the parser could not read at all stay absent and are disclosed
+ * in the coverage table; they are not questions to answer.
+ */
 function reviewableValues(report: CanonicalReport): CanonicalValue<string | number>[] {
-  return allValues(report).filter((value): value is CanonicalValue<string | number> => value.state === 'known' && value.normalized !== null && (typeof value.normalized === 'string' || typeof value.normalized === 'number'))
+  return correctableValues(report).filter(value => {
+    if (value.review) return true // A correction already made stays visible so it can be revised.
+    if (value.state === 'parser-failed') return true
+    return value.state === 'known' && value.confidence < PUBLISHABLE_CONFIDENCE
+  })
+}
+
+/**
+ * Every value a consumer is *permitted* to correct — which is any value carrying a comparable
+ * normalized reading, not just the exceptions surfaced above.
+ *
+ * The two sets differ deliberately. We only *ask* about extraction exceptions, because that is
+ * the only place a consumer's answer is more informative than the evidence. But if someone reads
+ * page 4 and sees that a confidently-extracted value is wrong, their own report is the ground
+ * truth and refusing the correction would be indefensible. Bounded prompting, unbounded correction.
+ */
+function correctableValues(report: CanonicalReport): CanonicalValue<string | number>[] {
+  return allValues(report).filter((value): value is CanonicalValue<string | number> =>
+    value.normalized === null
+      ? value.state === 'parser-failed' || value.state === 'unknown'
+      : typeof value.normalized === 'string' || typeof value.normalized === 'number')
 }
 
 /** Reviews are an immutable provenance layer on the stored report. Consumers of normalized values

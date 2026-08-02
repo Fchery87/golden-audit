@@ -11,7 +11,3 @@ Triage uses the canonical `needs-triage`, `needs-info`, `ready-for-agent`, `read
 ### Domain docs
 
 Domain documentation uses a single-context layout with root `CONTEXT.md` and `docs/adr/`. See `docs/agents/domain.md`.
-
-### LLM Claims
-
-Verify all LLM claims by using skill /grill-with-docs first

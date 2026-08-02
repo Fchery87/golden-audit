@@ -7,15 +7,18 @@ export type ConsentResult = { workspaceId: string }
 export type AuthorizationResult = { id: string; version: string }
 export type UploadInitResult = { id: string; token: string; stage: string }
 export type UploadCompleteResult = { id: string; stage: string; mediaType: string }
-export type Disclosure = { authorizationVersion: string; authorizationText: string; retentionPolicy: { originalsMaxDays: number; deletionControl: string; description: string } }
-export type ConsumerDashboard = { email: string; workspaceId: string | null; consent: boolean; authorization: boolean; pendingReview: KickoffResult | null; reports: Array<{ id: string; generatedAt: string; findingCount: number; parserVersion: string; exportId: string | null }> }
+export type Disclosure = { authorizationVersion: string; authorizationText: string; retentionPolicy: { originalsMaxDays: number; deletionControl: string; description: string }; identityAttestationVersion: string; identityAttestationText: string }
+export type PostalAddress = { line1: string; line2?: string; city: string; state: string; postalCode: string }
+export type ConsumerIdentityInput = { fullName: string; dateOfBirth: string; ssnLastFour: string; currentAddress: PostalAddress; previousAddresses: PostalAddress[]; attestationVersion: string; accurateAndComplete: true }
+export type ConsumerIdentity = Omit<ConsumerIdentityInput, 'accurateAndComplete'> & { attestedAt: string }
+export type ConsumerDashboard = { email: string; workspaceId: string | null; identity: boolean; consent: boolean; authorization: boolean; pendingReview: KickoffResult | null; reports: Array<{ id: string; generatedAt: string; findingCount: number; parserVersion: string; exportId: string | null }> }
 export type ReviewDecision = 'confirmed' | 'corrected' | 'unknown' | 'not-shown'
 export type ConsumerReviewValue = { id: string; bureau: string; field: string; normalized: string | number | null; originalDisplay: string; state: string; source: { kind: string; locator: string }; confidence: number; review?: { decision: ReviewDecision; reason: string; replacement?: string | number } }
 export type ConsumerValueReview = { reportId: string; required: number; decided: number; complete: boolean; values: ConsumerReviewValue[] }
 export type MatchGroupSummary = { id: string; state: string; confidence: number; tradelineIds: string[]; signals: string[] }
 export type TradelineSummary = { id: string; bureau: string; creditor: string; maskedAccount: string; balanceCents: number | null }
 export type CompleteAnalysisResult = { status: 'analysis-complete'; reportId: string; analysisId: string; consumerReportId: string; exportId: string }
-export type KickoffResult = { status: 'analysis-complete' | 'value-review-required' | 'match-review-required' | 'review-complete'; reportId: string; matches?: MatchGroupSummary[]; tradelines?: TradelineSummary[]; required?: number; decided?: number; analysisId?: string; consumerReportId?: string; exportId?: string }
+export type KickoffResult = { status: 'analysis-complete' | 'match-review-required'; reportId: string; matches?: MatchGroupSummary[]; tradelines?: TradelineSummary[]; required?: number; decided?: number; analysisId?: string; consumerReportId?: string; exportId?: string }
 export type AnalysisFinding = { id: string; title: string; severity: string; confidence: number; limitations?: string[] }
 export type ReportPresentationProfile = { revision: number; organizationName: string; preparedByLabel?: string; preparedByTitle?: string; logoUrl?: string; supportEmail?: string; websiteUrl?: string; supportPhone?: string; mailingAddress?: string; reportTitle?: string; reportSubtitle?: string; accent: 'gold' | 'charcoal' | 'sage'; printStyle: 'standard' | 'compact'; closingNote?: string }
 export type AdminDashboard = { profile: ReportPresentationProfile; csrfToken: string }
@@ -23,7 +26,33 @@ export type ReportAccountCell = { label: string; value: string; source: { kind: 
 export type ReportAccountRow = { id: string; bureau: string; cells: ReportAccountCell[] }
 export type ReportScoreRow = { bureau: string; score: number; scoreScale: string; source: { kind: string; locator: string }; scaleSource: { kind: string; locator: string } }
 export type ReportInquiryRow = { id: string; bureau: string; creditor: string; businessType?: string; date: string; source: { kind: string; locator: string } }
-export type ConsumerReport = { id: string; analysisId: string; limitations: string[]; overview: Record<string, number>; generatedAt?: string; presentation: ReportPresentationProfile; recipient?: { displayName: string; source: { kind: string; locator: string }; confidence: number }; findings: Array<Omit<AnalysisFinding, 'limitations'> & { limitations: string[]; classification: string; evidence: Array<{ field: string; value: string | number | null; source: { page?: number; locator?: string; originalDisplay?: string } }>; alternativeExplanations: string[]; suggestedAction: string; verificationDocuments: string[]; educationModules: Array<{ id: string; title: string; body: string; limitations: string[] }>; authorities: Array<{ id: string; title: string; sourceUrl: string; citation: string }> }>; content?: { catalogVersion: string; rulesetVersion: string; parserVersion: string; sectionPrimers: Array<{ id: string; title: string; body: string; limitations: string[]; authorityIds: string[]; authorities: Array<{ id: string; title: string; sourceUrl: string; citation: string }> }>; coverage: Array<{ ruleId: string; name: string; requiredInputs: string[]; outcomes: Array<{ outcome: string; reason: string }> }>; parserFields: Array<{ field: string; capability: 'supported' | 'planned'; states: Record<string, number> }>; accountRows?: ReportAccountRow[]; scoreRows?: ReportScoreRow[]; inquiryRows?: ReportInquiryRow[] } }
+export type ReportIdentityRow = { id: string; bureau: string; field: string; value: string; attestationMatch: 'matches-attested' | 'differs-from-attested' | 'not-compared'; source: { kind: string; locator: string } }
+export type ReportSummary = {
+  accountsRead: number
+  accountsByBureau: Record<string, number>
+  openAccounts: number
+  closedAccounts: number
+  negativeItems: { total: number; collections: number; pastDueAccounts: number; derogatoryStatusAccounts: number; statusUnavailable: number }
+  crossBureauInconsistencies: number
+  identityObservations: number
+  inquiriesRead: number
+  totalBalanceCents: number | null
+  totalPastDueCents: number | null
+  utilization: { revolvingBalanceCents: number; revolvingLimitCents: number; ratio: number | null; accountsCounted: number; accountsWithoutLimit: number }
+}
+export type ReimportAccountRef = { creditor: string; bureau: string; maskedAccount: string }
+export type ReimportDiff = {
+  previousConsumerReportId: string
+  previousGeneratedAt: string
+  newAccounts: ReimportAccountRef[]
+  removedAccounts: ReimportAccountRef[]
+  changedAccounts: Array<ReimportAccountRef & { changes: Array<{ field: string; from: string; to: string }> }>
+  scoreChanges: Array<{ bureau: string; from: number; to: number; delta: number }>
+  findingsResolved: string[]
+  findingsNew: string[]
+  findingsUnchanged: number
+}
+export type ConsumerReport = { id: string; analysisId: string; sourceReportId?: string; limitations: string[]; overview: Record<string, number>; generatedAt?: string; presentation: ReportPresentationProfile; recipient?: { displayName: string; source: { kind: string; locator: string }; confidence: number }; findings: Array<Omit<AnalysisFinding, 'limitations'> & { limitations: string[]; classification: string; evidence: Array<{ field: string; subject?: 'tradeline' | 'identity'; value: string | number | null; source: { page?: number; locator?: string; originalDisplay?: string } }>; alternativeExplanations: string[]; suggestedAction: string; verificationDocuments: string[]; educationModules: Array<{ id: string; title: string; body: string; limitations: string[] }>; authorities: Array<{ id: string; title: string; sourceUrl: string; citation: string }> }>; content?: { catalogVersion: string; rulesetVersion: string; parserVersion: string; sectionPrimers: Array<{ id: string; title: string; body: string; limitations: string[]; authorityIds: string[]; authorities: Array<{ id: string; title: string; sourceUrl: string; citation: string }> }>; coverage: Array<{ ruleId: string; name: string; requiredInputs: string[]; outcomes: Array<{ outcome: string; reason: string }> }>; parserFields: Array<{ field: string; capability: 'supported' | 'planned'; states: Record<string, number> }>; summary?: ReportSummary; identityRows?: ReportIdentityRow[]; reimport?: ReimportDiff; pendingMatchGroups?: number; accountRows?: ReportAccountRow[]; scoreRows?: ReportScoreRow[]; inquiryRows?: ReportInquiryRow[] } }
 export type PasswordResetRequestResult = { status: 'if-account-exists-reset-issued' }
 export type PasswordResetConfirmResult = { status: 'password-reset' }
 export type EmailVerificationRequestResult = { status: 'verification-issued' }
@@ -46,6 +75,8 @@ export const api = {
   signIn: (email: string, password: string) => post<SignInResult>('/consumer/sign-in', { email, password }),
   signOut: () => post<SignInResult>('/consumer/sign-out', {}),
   getDisclosure: () => request<Disclosure>('/consumer/disclosures'),
+  getIdentity: () => request<{ identity: ConsumerIdentity | null }>('/consumer/identity'),
+  recordIdentity: (input: ConsumerIdentityInput) => post<ConsumerIdentity>('/consumer/identity', input),
   getDashboard: () => request<ConsumerDashboard>('/consumer/dashboard'),
   consent: (residence: string, analysisJurisdiction: string) => post<ConsentResult>('/consumer/consent', { version: '2026-01', adultUSConsumer: true, authorizedReportUse: true, educationalLimitations: true, sensitiveDataHandling: true, residence, analysisJurisdiction }),
   acceptAuthorization: (version: string, accepted: boolean) => post<AuthorizationResult>('/consumer/authorization', { version, accepted }),
@@ -59,7 +90,8 @@ export const api = {
   kickoffAnalysis: (uploadId: string) => post<KickoffResult>(`/consumer/uploads/${encodeURIComponent(uploadId)}/kickoff-analysis`, { jurisdiction: 'CA' }),
   getValueReview: (reportId: string) => request<ConsumerValueReview>(`/consumer/reports/${encodeURIComponent(reportId)}/value-review`),
   decideValue: (reportId: string, valueId: string, decision: ReviewDecision, reason: string, replacement?: string | number) => post<ConsumerValueReview>(`/consumer/reports/${encodeURIComponent(reportId)}/values/${encodeURIComponent(valueId)}/decision`, { decision, reason, ...(replacement !== undefined ? { replacement } : {}) }),
-  completeValueReview: (reportId: string) => post<KickoffResult>(`/consumer/reports/${encodeURIComponent(reportId)}/value-review`, {}),
+  getPendingMatches: (reportId: string) => request<{ reportId: string; matches: MatchGroupSummary[]; tradelines: TradelineSummary[] }>(`/consumer/reports/${encodeURIComponent(reportId)}/pending-matches`),
+  completeValueReview: (reportId: string) => post<CompleteAnalysisResult>(`/consumer/reports/${encodeURIComponent(reportId)}/value-review`, {}),
   decideMatch: (matchId: string, action: 'confirmed' | 'rejected', reason: string) => post<MatchGroupSummary>(`/consumer/matches/${encodeURIComponent(matchId)}/decision`, { action, reason }),
   confirmSubgroup: (matchId: string, tradelineIds: string[], reason: string) => post<MatchGroupSummary>(`/consumer/matches/${encodeURIComponent(matchId)}/confirm-subgroup`, { tradelineIds, reason }),
   completeAnalysis: (reportId: string, jurisdiction = 'CA') => post<CompleteAnalysisResult>(`/consumer/reports/${encodeURIComponent(reportId)}/complete-analysis`, { jurisdiction }),

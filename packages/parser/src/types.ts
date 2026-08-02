@@ -53,11 +53,34 @@ export type ParserScore = {
   scale: ParserValue<string>
 }
 
+/**
+ * The report's own personal-information section, kept per bureau.
+ *
+ * Each bureau states these independently, and the differences between them are the signal: a name
+ * or address one bureau holds and the others do not is the classic mixed-file indicator. Collapsing
+ * them into one list would destroy exactly the comparison this section exists to support.
+ */
+export type ParserPersonalInformation = {
+  names: ParserValue<string>[]
+  alsoKnownAs: ParserValue<string>[]
+  datesOfBirth: ParserValue<string>[]
+  currentAddresses: ParserValue<string>[]
+  previousAddresses: ParserValue<string>[]
+  employers: ParserValue<string>[]
+  /** Masked fragments as displayed (e.g. "XXX-XX-1234"). A full number is never extracted. */
+  socialSecurityFragments: ParserValue<string>[]
+}
+
+export const emptyPersonalInformation = (): ParserPersonalInformation => ({
+  names: [], alsoKnownAs: [], datesOfBirth: [], currentAddresses: [], previousAddresses: [], employers: [], socialSecurityFragments: [],
+})
+
 export type ParserReport = {
   provider: string
   template: string
   reportDate: string | null
   identity: ParserValue<string>[]
+  personalInformation: ParserPersonalInformation
   tradelines: ParserTradeline[]
   inquiries: ParserInquiry[]
   scores: ParserScore[]

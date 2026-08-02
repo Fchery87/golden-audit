@@ -3,6 +3,7 @@ import { AlertCircle, FileText, Loader2, LogIn, ShieldCheck, Trash2, Upload } fr
 import { Button } from '@/components/ui/button'
 import { Input, Label } from '@/components/ui/input'
 import { ReportDocument, ReportActions } from '@/components/consumer/report-document'
+import { IdentityStep } from '@/components/consumer/identity-intake'
 import { ResultsView } from '@/components/flow/results-view'
 import { api, type ConsumerDashboard, type ConsumerReport, type Disclosure, type KickoffResult, type CompleteAnalysisResult, type ConsumerValueReview, type ConsumerReviewValue, type ReviewDecision } from '@/lib/api'
 
@@ -63,7 +64,7 @@ export function ConsumerApp() {
         <div className="flex gap-4"><button className="underline underline-offset-4" onClick={() => { setScreen('home'); setReport(null) }}>Review</button><button className="underline underline-offset-4" onClick={() => setScreen('account')}>Account</button></div>
       </nav>
       {error && <p role="alert" className="mt-5 flex gap-2 text-sm text-negative"><AlertCircle className="h-4 w-4 shrink-0" /> {error}</p>}
-      {screen === 'account' ? <AccountPanel dashboard={dashboard} onDeleted={() => { setDashboard(null); setReport(null); setScreen('home') }} onOpenReport={openReport} /> : report ? <ReportScreen report={report} onBack={() => setReport(null)} /> : <Onboarding dashboard={dashboard} onRefresh={refresh} onOpenReport={openReport} onCompletedReport={openCompletedReport} />}
+      {screen === 'account' ? <AccountPanel dashboard={dashboard} onDeleted={() => { setDashboard(null); setReport(null); setScreen('home') }} onOpenReport={openReport} /> : report ? <ReportScreen report={report} onBack={() => setReport(null)} onReanalyzed={result => void openCompletedReport(result.consumerReportId)} /> : <Onboarding dashboard={dashboard} onRefresh={refresh} onOpenReport={openReport} onCompletedReport={openCompletedReport} />}
     </section>
   )
 }
@@ -132,8 +133,9 @@ function EmailVerificationConfirm({ token, onComplete }: { token: string; onComp
 }
 
 function Onboarding({ dashboard, onRefresh, onOpenReport, onCompletedReport }: { dashboard: ConsumerDashboard; onRefresh: () => Promise<void>; onOpenReport: (id: string) => Promise<void>; onCompletedReport: (id: string) => Promise<void> }) {
-  if (dashboard.pendingReview) return <section className="mt-10"><h1 className="font-serif text-3xl tracking-tight">Resume your account review.</h1><p className="mt-3 text-muted-foreground">Review each source-linked value before account matching and analysis can begin.</p>{dashboard.pendingReview.status === 'value-review-required' ? <ValueReview reportId={dashboard.pendingReview.reportId} onCompleted={() => void onRefresh()} /> : <ResultsView kickoff={dashboard.pendingReview} onCompleted={(result: CompleteAnalysisResult) => void onCompletedReport(result.consumerReportId)} />}</section>
-  if (dashboard.reports.length > 0) return <section className="mt-10"><h1 className="font-serif text-3xl tracking-tight">Your reports</h1><p className="mt-3 text-muted-foreground">Choose a completed reading or start another review when you have a new report.</p><ul className="mt-8 divide-y divide-rule border-y border-rule">{dashboard.reports.map(report => <li key={report.id} className="flex flex-wrap items-center justify-between gap-4 py-5"><div><p className="font-medium">Report from {new Date(report.generatedAt).toLocaleDateString()}</p><p className="text-sm text-muted-foreground">{report.findingCount} findings · parser {report.parserVersion}</p></div><Button variant="outline" onClick={() => void onOpenReport(report.id)}><FileText className="h-4 w-4" /> Open report</Button></li>)}</ul></section>
+  if (dashboard.pendingReview) return <section className="mt-10"><h1 className="font-serif text-3xl tracking-tight">Finish this reading.</h1><p className="mt-3 text-muted-foreground">This report was read but its reading was not delivered. Continue from where it stopped rather than uploading the document again.</p><ResultsView kickoff={dashboard.pendingReview} onCompleted={(result: CompleteAnalysisResult) => void onCompletedReport(result.consumerReportId)} /></section>
+  if (dashboard.reports.length > 0) return <section className="mt-10"><h1 className="font-serif text-3xl tracking-tight">Your reports</h1><p className="mt-3 text-muted-foreground">Open a completed reading, or upload a newer report to see what changed since the last one.</p><ul className="mt-8 divide-y divide-rule border-y border-rule">{dashboard.reports.map(report => <li key={report.id} className="flex flex-wrap items-center justify-between gap-4 py-5"><div><p className="font-medium">Report from {new Date(report.generatedAt).toLocaleDateString()}</p><p className="text-sm text-muted-foreground">{report.findingCount} findings · parser {report.parserVersion}</p></div><Button variant="outline" onClick={() => void onOpenReport(report.id)}><FileText className="h-4 w-4" /> Open report</Button></li>)}</ul><div className="mt-10 border-t border-rule pt-8"><h2 className="font-serif text-2xl">Upload a newer report</h2><UploadStep workspaceId={dashboard.workspaceId} onComplete={onCompletedReport} /></div></section>
+  if (!dashboard.identity) return <IdentityStep onComplete={onRefresh} />
   if (!dashboard.consent) return <ConsentStep onComplete={onRefresh} />
   if (!dashboard.authorization) return <AuthorizationStep onComplete={onRefresh} />
   return <UploadStep workspaceId={dashboard.workspaceId} onComplete={onCompletedReport} />
@@ -156,38 +158,93 @@ function AuthorizationStep({ onComplete }: { onComplete: () => Promise<void> }) 
 function UploadStep({ workspaceId, onComplete }: { workspaceId: string | null; onComplete: (id: string) => Promise<void> }) {
   const [file, setFile] = React.useState<File | null>(null); const [busy, setBusy] = React.useState(false); const [error, setError] = React.useState<string | null>(null); const [review, setReview] = React.useState<KickoffResult | null>(null)
   async function submit(event: React.FormEvent) { event.preventDefault(); if (!file || !workspaceId) return; if (file.type !== 'application/pdf' && !file.name.toLowerCase().endsWith('.pdf')) { setError('Choose an IdentityIQ PDF report.'); return }; setBusy(true); setError(null); try { const initialized = await api.initUpload(workspaceId); const contentBase64 = await fileToBase64(file); await api.completeUpload({ uploadId: initialized.id, token: initialized.token, fileName: file.name, mediaType: 'application/pdf', contentBase64 }); const result = await api.kickoffAnalysis(initialized.id); if (result.status === 'analysis-complete' && result.consumerReportId) await onComplete(result.consumerReportId); else setReview(result) } catch (cause) { setError(cause instanceof Error ? cause.message : 'Unable to process this report') } finally { setBusy(false) } }
-  if (review?.status === 'value-review-required') return <ValueReview reportId={review.reportId} onCompleted={() => setReview(null)} />
   if (review) return <ResultsView kickoff={review} onCompleted={(result: CompleteAnalysisResult) => void onComplete(result.consumerReportId)} />
-  return <section className="mt-10 max-w-2xl"><h1 className="font-serif text-3xl tracking-tight">Upload your IdentityIQ PDF.</h1><p className="mt-3 text-muted-foreground">Choose the PDF exported from IdentityIQ. Saved HTML reports are not supported because they do not contain the account data needed for this review.</p><form onSubmit={submit} className="mt-8 border border-rule bg-paper p-6"><Label>Credit report PDF<Input className="mt-2" required type="file" accept="application/pdf,.pdf" onChange={event => setFile(event.target.files?.[0] ?? null)} /></Label>{file && <p className="mt-4 text-sm text-muted-foreground">{file.name} · {Math.ceil(file.size / 1024)} KB</p>}{error && <p className="mt-4 text-sm text-negative" role="alert">{error}</p>}<Button className="mt-6" type="submit" disabled={!file || busy}>{busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}Review my report</Button></form></section>
+  return <section className="mt-10 max-w-2xl"><h1 className="font-serif text-3xl tracking-tight">Upload your IdentityIQ PDF.</h1><p className="mt-3 text-muted-foreground">Choose the PDF exported from IdentityIQ. Saved HTML reports are not supported because they do not contain the account data needed for this reading. Your reading is produced as soon as the document is read — there is nothing to fill in afterwards.</p><form onSubmit={submit} className="mt-8 border border-rule bg-paper p-6"><Label>Credit report PDF<Input className="mt-2" required type="file" accept="application/pdf,.pdf" onChange={event => setFile(event.target.files?.[0] ?? null)} /></Label>{file && <p className="mt-4 text-sm text-muted-foreground">{file.name} · {Math.ceil(file.size / 1024)} KB</p>}{error && <p className="mt-4 text-sm text-negative" role="alert">{error}</p>}<Button className="mt-6" type="submit" disabled={!file || busy}>{busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}{busy ? 'Reading your report…' : 'Read my report'}</Button></form></section>
 }
 
-function ValueReview({ reportId, onCompleted }: { reportId: string; onCompleted: () => void }) {
+/**
+ * Optional corrections for the handful of values the parser was least sure about.
+ *
+ * It lives behind the delivered reading, not in front of it, and it lists only extraction
+ * exceptions — never values the parser read confidently. A consumer who ignores this entirely
+ * still has a complete reading; the uncorrected values simply stay suppressed, exactly as the
+ * coverage table already says.
+ */
+function CorrectionsPanel({ reportId, onReanalyzed }: { reportId: string; onReanalyzed: (result: CompleteAnalysisResult) => void }) {
   const [review, setReview] = React.useState<ConsumerValueReview | null>(null)
+  const [open, setOpen] = React.useState(false)
   const [busy, setBusy] = React.useState<string | null>(null)
   const [error, setError] = React.useState<string | null>(null)
-  const [reasonByValue, setReasonByValue] = React.useState<Record<string, string>>({})
-  const [decisionByValue, setDecisionByValue] = React.useState<Record<string, ReviewDecision>>({})
-  const [replacementByValue, setReplacementByValue] = React.useState<Record<string, string>>({})
-  const load = React.useCallback(async () => { try { setReview(await api.getValueReview(reportId)) } catch (cause) { setError(cause instanceof Error ? cause.message : 'Unable to load extracted values') } }, [reportId])
+  const [draft, setDraft] = React.useState<Record<string, { decision: ReviewDecision; reason: string; replacement: string }>>({})
+  const load = React.useCallback(async () => { try { setReview(await api.getValueReview(reportId)) } catch { /* The reading stands on its own; a failure to load optional corrections is not worth interrupting it. */ } }, [reportId])
   React.useEffect(() => { void load() }, [load])
-  async function save(value: ConsumerReviewValue) {
-    const decision = decisionByValue[value.id] ?? 'confirmed'; const reason = reasonByValue[value.id]?.trim() ?? ''
-    if (!reason) { setError('Add a short reason for each decision.'); return }
-    let replacement: string | number | undefined
-    if (decision === 'corrected') { const raw = replacementByValue[value.id] ?? ''; replacement = typeof value.normalized === 'number' ? Number(raw) : raw; if (!raw.trim() || (typeof replacement === 'number' && !Number.isFinite(replacement))) { setError('Enter a valid replacement.'); return } }
-    setBusy(value.id); setError(null)
-    try { await api.decideValue(reportId, value.id, decision, reason, replacement); await load() } catch (cause) { setError(cause instanceof Error ? cause.message : 'Unable to save decision') } finally { setBusy(null) }
+
+  const emptyDraft = { decision: 'corrected' as ReviewDecision, reason: '', replacement: '' }
+  function patch(id: string, next: Partial<typeof emptyDraft>) {
+    setDraft(current => ({ ...current, [id]: { ...emptyDraft, ...current[id], ...next } }))
   }
-  async function complete() { setBusy('complete'); setError(null); try { await api.completeValueReview(reportId); onCompleted() } catch (cause) { setError(cause instanceof Error ? cause.message : 'Complete every value review before continuing.') } finally { setBusy(null) } }
-  if (!review) return <p className="mt-10" role="status">Loading source-linked values…</p>
-  return <section className="mt-10"><h1 className="font-serif text-3xl tracking-tight">Review extracted report values.</h1><p className="mt-3 max-w-3xl text-muted-foreground">Confirm, correct, or mark unavailable each extracted value before account matching and analysis. Your original display and source reference remain preserved.</p><p className="mt-5 text-sm font-medium">{review.decided} of {review.required} decisions saved</p>{error && <p className="mt-4 text-sm text-negative" role="alert">{error}</p>}<ul className="mt-8 space-y-4">{review.values.map(value => <ValueReviewRow key={value.id} value={value} decision={decisionByValue[value.id] ?? value.review?.decision ?? 'confirmed'} reason={reasonByValue[value.id] ?? value.review?.reason ?? ''} replacement={replacementByValue[value.id] ?? (value.review?.replacement === undefined ? '' : String(value.review.replacement))} busy={busy === value.id} onChange={(patch) => { if (patch.decision) setDecisionByValue(current => ({ ...current, [value.id]: patch.decision! })); if (patch.reason !== undefined) setReasonByValue(current => ({ ...current, [value.id]: patch.reason! })); if (patch.replacement !== undefined) setReplacementByValue(current => ({ ...current, [value.id]: patch.replacement! })) }} onSave={() => void save(value)} />)}</ul><Button className="mt-8" disabled={busy !== null || review.decided !== review.required} onClick={() => void complete()}>{busy === 'complete' && <Loader2 className="h-4 w-4 animate-spin" />}Continue to account matching</Button></section>
+  async function save(value: ConsumerReviewValue) {
+    const entry = draft[value.id] ?? emptyDraft
+    if (!entry.reason.trim()) { setError('Add a short note saying what you checked this against.'); return }
+    let replacement: string | number | undefined
+    if (entry.decision === 'corrected') {
+      replacement = typeof value.normalized === 'number' ? Number(entry.replacement) : entry.replacement
+      if (!entry.replacement.trim() || (typeof replacement === 'number' && !Number.isFinite(replacement))) { setError('Enter the value as your report shows it.'); return }
+    }
+    setBusy(value.id); setError(null)
+    try { await api.decideValue(reportId, value.id, entry.decision, entry.reason, replacement); await load() } catch (cause) { setError(cause instanceof Error ? cause.message : 'Unable to save that correction') } finally { setBusy(null) }
+  }
+  async function reanalyze() {
+    setBusy('complete'); setError(null)
+    try { onReanalyzed(await api.completeValueReview(reportId)) } catch (cause) { setError(cause instanceof Error ? cause.message : 'Unable to re-run this reading') } finally { setBusy(null) }
+  }
+
+  if (!review || review.values.length === 0) return null
+  return <section className="no-print mt-12 border-t border-rule pt-8">
+    <h2 className="font-serif text-2xl">Values this parser was unsure about</h2>
+    <p className="mt-3 max-w-3xl text-muted-foreground">
+      {review.values.length} {review.values.length === 1 ? 'value' : 'values'} could not be read confidently, so the checks that
+      needed {review.values.length === 1 ? 'it' : 'them'} were suppressed rather than guessed. This is optional: if you can see
+      the value on your own report, entering it unlocks those checks. Everything else was read confidently and needs nothing from you.
+    </p>
+    <Button className="mt-5" variant="outline" onClick={() => setOpen(current => !current)}>{open ? 'Hide' : `Show ${review.values.length}`}</Button>
+    {error && <p className="mt-4 text-sm text-negative" role="alert">{error}</p>}
+    {open && <>
+      <ul className="mt-6 space-y-4">{review.values.map(value => {
+        const entry = draft[value.id] ?? emptyDraft
+        return <li key={value.id} className="border border-rule bg-paper p-5">
+          <div className="flex flex-wrap justify-between gap-2">
+            <p className="font-medium capitalize">{value.field.replaceAll(/([A-Z])/g, ' $1')} <span className="text-sm font-normal text-muted-foreground">· {value.bureau}</span></p>
+            <p className="font-mono text-xs text-muted-foreground">{value.source.locator}</p>
+          </div>
+          <p className="mt-2 text-sm">Read as: <strong>{value.originalDisplay || 'nothing readable'}</strong>{value.review && <span className="ml-2 text-muted-foreground">— you corrected this</span>}</p>
+          <div className="mt-4 grid gap-3 sm:grid-cols-3">
+            <select aria-label={`What to do with ${value.field}`} className="h-10 border border-input bg-transparent px-3 text-sm" value={entry.decision} onChange={event => patch(value.id, { decision: event.target.value as ReviewDecision })}>
+              <option value="corrected">My report shows a different value</option>
+              <option value="confirmed">This matches my report</option>
+              <option value="unknown">My report does not show this</option>
+            </select>
+            {entry.decision === 'corrected' && <Input aria-label={`Value shown on your report for ${value.field}`} value={entry.replacement} onChange={event => patch(value.id, { replacement: event.target.value })} placeholder="Value as your report shows it" />}
+            <Input aria-label={`Note for ${value.field}`} value={entry.reason} onChange={event => patch(value.id, { reason: event.target.value })} placeholder="Where you checked (e.g. page 4)" />
+          </div>
+          <Button className="mt-3" size="sm" variant="outline" disabled={busy === value.id} onClick={() => void save(value)}>{busy === value.id && <Loader2 className="h-4 w-4 animate-spin" />}Save</Button>
+        </li>
+      })}</ul>
+      <Button className="mt-6" disabled={busy !== null || review.decided === 0} onClick={() => void reanalyze()}>
+        {busy === 'complete' && <Loader2 className="h-4 w-4 animate-spin" />}Re-read my report with these corrections
+      </Button>
+      {review.decided === 0 && <p className="mt-3 text-sm text-muted-foreground">Save at least one correction to re-read the report.</p>}
+    </>}
+  </section>
 }
 
-function ValueReviewRow({ value, decision, reason, replacement, busy, onChange, onSave }: { value: ConsumerReviewValue; decision: ReviewDecision; reason: string; replacement: string; busy: boolean; onChange: (patch: { decision?: ReviewDecision; reason?: string; replacement?: string }) => void; onSave: () => void }) {
-  return <li className="border border-rule bg-paper p-5"><div className="flex flex-wrap justify-between gap-2"><p className="font-medium capitalize">{value.field.replaceAll(/([A-Z])/g, ' $1')}</p><p className="font-mono text-xs text-muted-foreground">{value.source.locator}</p></div><p className="mt-2 text-sm">{value.originalDisplay || 'Not shown in source'}</p><div className="mt-4 grid gap-3 sm:grid-cols-3"><select aria-label={`Decision for ${value.field}`} className="h-10 border border-input bg-transparent px-3 text-sm" value={decision} onChange={event => onChange({ decision: event.target.value as ReviewDecision })}><option value="confirmed">Confirm</option><option value="corrected">Correct</option><option value="unknown">Mark unavailable</option><option value="not-shown">Not shown</option></select>{decision === 'corrected' && <Input aria-label={`Correction for ${value.field}`} value={replacement} onChange={event => onChange({ replacement: event.target.value })} placeholder="Corrected value" />}<Input aria-label={`Reason for ${value.field}`} value={reason} onChange={event => onChange({ reason: event.target.value })} placeholder="Reason for this decision" /></div><Button className="mt-3" size="sm" variant="outline" disabled={busy} onClick={onSave}>{busy && <Loader2 className="h-4 w-4 animate-spin" />}Save decision</Button></li>
+function ReportScreen({ report, onBack, onReanalyzed }: { report: { report: ConsumerReport; exportId: string | null }; onBack: () => void; onReanalyzed: (result: CompleteAnalysisResult) => void }) {
+  return <section className="mt-8">
+    <div className="no-print mb-8 flex flex-wrap items-center justify-between gap-4"><button className="text-sm underline underline-offset-4" onClick={onBack}>Back to reports</button><ReportActions exportId={report.exportId} /></div>
+    <ReportDocument report={report.report} />
+    {report.report.sourceReportId && <CorrectionsPanel reportId={report.report.sourceReportId} onReanalyzed={onReanalyzed} />}
+  </section>
 }
-
-function ReportScreen({ report, onBack }: { report: { report: ConsumerReport; exportId: string | null }; onBack: () => void }) { return <section className="mt-8"><div className="no-print mb-8 flex flex-wrap items-center justify-between gap-4"><button className="text-sm underline underline-offset-4" onClick={onBack}>Back to reports</button><ReportActions exportId={report.exportId} /></div><ReportDocument report={report.report} /></section> }
 
 function AccountPanel({ dashboard, onDeleted, onOpenReport }: { dashboard: ConsumerDashboard; onDeleted: () => void; onOpenReport: (id: string) => Promise<void> }) {
   const [confirming, setConfirming] = React.useState(false); const [busy, setBusy] = React.useState(false); const [error, setError] = React.useState<string | null>(null); const [verificationSent, setVerificationSent] = React.useState(false)

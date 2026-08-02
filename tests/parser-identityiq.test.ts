@@ -279,3 +279,89 @@ test('identityiq-pdf: whole-dollar balances normalize to minor units (x100), mat
 function which(bin: string): boolean {
   try { execSync(`command -v ${bin}`, { stdio: 'ignore' }); return true } catch { return false }
 }
+
+/**
+ * Personal Information reader.
+ *
+ * The fixture reproduces the layout quirks that actually appear in the authorized samples, because
+ * each one broke a plausible-looking first implementation:
+ *  - the label is vertically CENTERED against a multi-row value, so it is not the block's first row;
+ *  - TransUnion values start left of where a naive left-edge cut would put the label boundary;
+ *  - one bureau states the birth date as a bare year while another states the full date;
+ *  - addresses wrap over three rows with no delimiter and a reported-on date between them.
+ */
+const personalFixture = (): Word[] => [
+  word(1, 60, 100, 200, 112, 'Personal'), word(1, 205, 100, 300, 112, 'Information'),
+  word(1, 215, 130, 268, 142, 'TransUnion'), word(1, 350, 130, 394, 142, 'Experian'), word(1, 484, 130, 524, 142, 'Equifax'),
+  // Name: the label ends at x≈157 and TransUnion's first token starts at x≈215.
+  word(1, 130, 150, 170, 162, 'Name:'),
+  word(1, 215, 150, 250, 162, 'ALEXANDER'), word(1, 255, 150, 285, 162, 'RIVERA'),
+  word(1, 340, 150, 372, 162, 'ALEXANDER'), word(1, 376, 150, 386, 162, 'J'), word(1, 390, 150, 425, 162, 'RIVERA'),
+  word(1, 470, 150, 505, 162, 'MARCUS'), word(1, 510, 150, 550, 162, 'OKONKWO'),
+  // Date of birth: Experian states only the year.
+  word(1, 120, 170, 175, 182, 'Date of Birth:'),
+  word(1, 225, 170, 258, 182, '1/9/1986'), word(1, 356, 170, 390, 182, '1986'), word(1, 488, 170, 520, 182, '1/9/1986'),
+  // Current address block: label centred on the middle row; Experian leads a row of its own.
+  word(1, 328, 200, 338, 212, '9'), word(1, 342, 200, 385, 212, 'HARTMAN'), word(1, 389, 200, 407, 212, 'RD'),
+  word(1, 200, 214, 215, 226, '9'), word(1, 220, 214, 265, 226, 'HARTMAN'), word(1, 270, 214, 290, 226, 'RD'),
+  word(1, 465, 214, 480, 226, '62'), word(1, 485, 214, 500, 226, 'N'), word(1, 505, 214, 540, 226, 'PINE'),
+  word(1, 80, 228, 180, 240, 'Current Address(es):'),
+  word(1, 220, 228, 250, 240, 'ALBANY,'), word(1, 255, 228, 275, 240, 'NY'),
+  word(1, 350, 228, 382, 240, 'ALBANY,'), word(1, 386, 228, 402, 240, 'NY'),
+  word(1, 480, 228, 515, 240, 'ALBANY,'), word(1, 520, 228, 540, 240, 'NY'),
+  word(1, 228, 242, 258, 254, '12208'), word(1, 356, 242, 395, 254, '12208-1088'), word(1, 490, 242, 520, 254, '12203'),
+  // A reported-on date sits between two addresses and must not prefix the next one.
+  word(1, 356, 256, 390, 268, '09/2025'),
+  word(1, 200, 270, 230, 282, '5221'), word(1, 235, 270, 285, 282, 'FLATLANDS'),
+  word(1, 80, 284, 180, 296, 'Previous Address(es):'),
+  word(1, 220, 284, 265, 296, 'BROOKLYN,'), word(1, 270, 284, 290, 296, 'NY'),
+  word(1, 228, 298, 258, 310, '11234'),
+  word(1, 100, 320, 180, 332, 'Employers:'),
+  word(1, 200, 320, 265, 332, 'MONSTAAR FITNESS'),
+  word(1, 470, 340, 520, 352, 'Back'), word(1, 525, 340, 545, 352, 'to'), word(1, 550, 340, 565, 352, 'Top'),
+]
+
+test('identityiq-pdf: personal information reads names, dates of birth, addresses, and employers per bureau', () => {
+  const { personalInformation } = parseIdentityIqPdf(personalFixture())
+
+  const nameByBureau = new Map(personalInformation.names.map(value => [value.bureau, value.normalized]))
+  assert.equal(nameByBureau.get('transunion'), 'ALEXANDER RIVERA')
+  assert.equal(nameByBureau.get('experian'), 'ALEXANDER J RIVERA')
+  assert.equal(nameByBureau.get('equifax'), 'MARCUS OKONKWO', 'a divergent bureau name is kept, not normalized away')
+
+  // Each bureau's stated precision is preserved. Padding the year-only value to a full date would
+  // invent a month and day the document never claimed.
+  const dobByBureau = new Map(personalInformation.datesOfBirth.map(value => [value.bureau, value.normalized]))
+  assert.equal(dobByBureau.get('transunion'), '1986-01-09')
+  assert.equal(dobByBureau.get('experian'), '1986')
+  assert.equal(dobByBureau.get('equifax'), '1986-01-09')
+
+  // The label sits on the block's middle row, so the rows above it belong to this field too.
+  const currentByBureau = new Map(personalInformation.currentAddresses.map(value => [value.bureau, value.normalized]))
+  assert.equal(currentByBureau.get('transunion'), '9 HARTMAN RD ALBANY, NY 12208')
+  assert.equal(currentByBureau.get('experian'), '9 HARTMAN RD ALBANY, NY 12208-1088')
+  assert.equal(currentByBureau.get('equifax'), '62 N PINE ALBANY, NY 12203')
+
+  // Ordering, not the label position, decides current vs previous: the "Previous Address(es)"
+  // label is centred and so sits below rows that already belong to it.
+  const previous = personalInformation.previousAddresses.filter(value => value.bureau === 'transunion')
+  assert.equal(previous.length, 1)
+  assert.equal(previous[0]?.normalized, '5221 FLATLANDS BROOKLYN, NY 11234', 'the interleaved reported-on date is dropped, not prefixed')
+
+  assert.equal(personalInformation.employers.find(value => value.bureau === 'transunion')?.normalized, 'MONSTAAR FITNESS')
+  assert.ok(personalInformation.names.every(value => value.source.locator.startsWith('pdf:')), 'every personal value keeps a source reference')
+})
+
+test('identityiq-pdf: personal information emits nothing rather than guessing when the section is absent or empty', () => {
+  assert.deepEqual(parseIdentityIqPdf(fixture()).personalInformation.names, [], 'no Personal Information section means no identity values')
+
+  // A dash is how these reports render "nothing on file" — an absence, not a value to publish.
+  const dashes = parseIdentityIqPdf([
+    word(1, 60, 100, 200, 112, 'Personal'), word(1, 205, 100, 300, 112, 'Information'),
+    word(1, 215, 130, 268, 142, 'TransUnion'), word(1, 350, 130, 394, 142, 'Experian'), word(1, 484, 130, 524, 142, 'Equifax'),
+    word(1, 108, 150, 160, 162, 'Also Known As:'),
+    word(1, 228, 150, 250, 162, '-'), word(1, 356, 150, 380, 162, '-'), word(1, 488, 150, 510, 162, '-'),
+    word(1, 470, 200, 520, 212, 'Back'), word(1, 525, 200, 545, 212, 'to'), word(1, 550, 200, 565, 212, 'Top'),
+  ])
+  assert.deepEqual(dashes.personalInformation.alsoKnownAs, [])
+})

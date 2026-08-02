@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import { existsSync, readFileSync } from 'node:fs'
 import { execSync } from 'node:child_process'
 import { CreditAnalysisPlatform, type Bureau, type ReportPresentationProfile } from '../packages/platform/src/index.js'
+import { attestTestIdentity } from './support-identity.js'
 
 const password = 'correct horse battery staple'
 const consent = { version: '2026-01', adultUSConsumer: true, authorizedReportUse: true, educationalLimitations: true, sensitiveDataHandling: true, residence: 'US-CA', analysisJurisdiction: 'US-CA' } as const
@@ -98,6 +99,7 @@ async function setup() {
   })
   const account = await registerAccount(platform, 'consumer@example.com')
   const workspace = await platform.recordConsent(account.sessionId, consent)
+  await attestTestIdentity(platform, account.sessionId)
   await platform.acceptAuthorization(account.sessionId) // FCRA counsel Q-L3: written authorization before processing
   return { platform, ...account, workspace }
 }
@@ -176,14 +178,16 @@ test('source-value review is owner-scoped and reviewed corrections drive matchin
   const { platform, sessionId, workspace } = await setup()
   const { report } = await uploadAndParse(platform, sessionId, workspace.id)
   const other = await registerAccount(platform, 'review-intruder@example.com')
-  const review = await platform.getValueReview(sessionId, report.id)
+  // getValueReview now lists only extraction exceptions, so a confidently-read fixture value is
+  // deliberately absent from it. Corrections are still accepted against any value, which is what
+  // this test exercises — the ids come from the report itself rather than the prompt list.
+  const equifaxLine = report.tradelines.find(line => line.creditor.bureau === 'equifax')!
+  const balance = equifaxLine.balance
+  const creditor = equifaxLine.creditor
   await assert.rejects(() => platform.getValueReview(other.sessionId, report.id), /Not found/)
-  await assert.rejects(() => platform.reviewValue(other.sessionId, report.id, review.values[0]!.id, { decision: 'confirmed', reason: 'intruder' }), /Not found/)
-  const balance = review.values.find(value => value.field === 'balance' && value.bureau === 'equifax')!
-  const creditor = review.values.find(value => value.field === 'creditor' && value.bureau === 'equifax')!
+  await assert.rejects(() => platform.reviewValue(other.sessionId, report.id, balance.id, { decision: 'confirmed', reason: 'intruder' }), /Not found/)
   await platform.reviewValue(sessionId, report.id, balance.id, { decision: 'corrected', reason: 'Statement shows a corrected balance.', replacement: 15000 })
   await platform.reviewValue(sessionId, report.id, creditor.id, { decision: 'unknown', reason: 'Cannot confirm this creditor.' })
-  for (const value of (await platform.getValueReview(sessionId, report.id)).values.filter(value => !value.review)) await platform.reviewValue(sessionId, report.id, value.id, { decision: 'confirmed', reason: 'Confirmed fixture value.' })
   await platform.completeReview(sessionId, report.id)
   const matches = await platform.proposeMatches(sessionId, report.id)
   assert.equal(matches.length, 0, 'unknown creditor removes the otherwise matchable account from grouping')
@@ -194,6 +198,7 @@ test('source-value review is owner-scoped and reviewed corrections drive matchin
   assert.equal(correctedBalance?.value, '$150.00')
   const exported = await platform.createExport(sessionId, consumerReport.id)
   assert.match(exported.content, /\$150\.00/)
+  // A corrected value stays listed so it can be revised, and its original display is preserved.
   const stored = await platform.getValueReview(sessionId, report.id)
   assert.equal(stored.values.find(value => value.id === balance.id)?.originalDisplay, '$125.00')
   assert.equal(stored.values.find(value => value.id === balance.id)?.review?.replacement, 15000)
@@ -207,8 +212,11 @@ test('ticket 05: governance publishes only approved immutable effective content'
 
 test('tickets 06-08: confirmed matching drives deterministic findings and user-controlled report actions', async () => {
   const { platform, sessionId, workspace } = await setup(); const { report } = await uploadAndParse(platform, sessionId, workspace.id); const ruleset = publishFixtureRules(platform); await completeAllReviewValues(platform, sessionId, report.id)
-  const matches = await platform.proposeMatches(sessionId, report.id); assert.equal(matches.length, 1); assert.equal(matches[0]?.confidence, 0.72); assert.equal(matches[0]?.state, 'split')
-  const confirmed = await platform.decideMatch(sessionId, matches[0]!.id, 'confirmed', 'Same account verified by consumer'); assert.equal(confirmed.history.length, 1)
+  // Same creditor, same masked account, one entry per bureau, no collision: unambiguous, so the
+  // group confirms itself and analysis needs no consumer decision. The two entries report DIFFERENT
+  // balances — that difference is the finding below, not a reason to withhold the match.
+  const matches = await platform.proposeMatches(sessionId, report.id); assert.equal(matches.length, 1); assert.equal(matches[0]?.confidence, 0.95); assert.equal(matches[0]?.state, 'confirmed')
+  assert.ok(matches[0]?.signals.includes('auto-confirmed')); assert.equal(matches[0]?.history.length, 1); assert.equal(matches[0]?.history[0]?.actorId, 'system')
   const first = await platform.runAnalysis(sessionId, report.id, ruleset, 'US-CA'); const second = await platform.runAnalysis(sessionId, report.id, ruleset, 'US-CA'); assert.equal(first.findings.length, 1); assert.deepEqual(first.findings.map(({ id: _id, ...finding }) => finding), second.findings.map(({ id: _id, ...finding }) => finding)); assert.equal(first.findings[0]?.classification, 'verification-recommended'); assert.equal(first.audit[0]?.outcome, 'triggered'); assert.match(first.findings[0]?.alternativeExplanations[0] ?? '', /different dates/i)
   const consumerReport = await platform.createConsumerReport(sessionId, first.id); assert.match(consumerReport.limitations.join(' '), /No legal verdict/); assert.equal(consumerReport.overview.tradelines, 2); const action = consumerReport.actions[0]!; const updated = await platform.updateAction(sessionId, consumerReport.id, action.id, { status: 'under-review', note: 'Gathering statement', documents: ['Recent creditor statement'] }); assert.equal(updated.status, 'under-review')
 })

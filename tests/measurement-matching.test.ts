@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import { existsSync, readFileSync } from 'node:fs'
 import { execSync } from 'node:child_process'
 import { CreditAnalysisPlatform, type Bureau } from '../packages/platform/src/index.js'
+import { attestTestIdentity } from './support-identity.js'
 
 const password = 'correct horse battery staple'
 const consent = { version: '2026-01', adultUSConsumer: true, authorizedReportUse: true, educationalLimitations: true, sensitiveDataHandling: true, residence: 'US-CA', analysisJurisdiction: 'US-CA' } as const
@@ -32,6 +33,7 @@ async function setup() {
   const inviteCode = await platform.issueInvite()
   const account = await platform.register({ email: 'measure-matching@example.com', password, inviteCode })
   const workspace = await platform.recordConsent(account.sessionId, consent)
+  await attestTestIdentity(platform, account.sessionId)
   await platform.acceptAuthorization(account.sessionId)
   return { platform, ...account, workspace }
 }
@@ -94,12 +96,16 @@ test('measurement: matching heuristic precision = 1.0 and recall = 1.0 on the ex
     [
       `equifax|Alpha Bank|${maskAccount('11111111')}`,
       `experian|Alpha Bank|${maskAccount('11111111')}`,
-    ].sort().join('~') + '|c=0.95|s=proposed',
+    ].sort().join('~') + '|c=0.95|s=confirmed',
     [
       `equifax|Beta Card|${maskAccount('22222222')}`,
       `experian|Beta Card|${maskAccount('22222222')}`,
       `transunion|Beta Card|${maskAccount('22222222')}`,
-    ].sort().join('~') + '|c=0.72|s=split',
+    // Beta Card's three bureaus report DIFFERENT balances and the group is still auto-confirmed at
+    // 0.95. Balance agreement is a recorded signal, not a matching requirement: same creditor, same
+    // masked account, one entry per bureau identifies the account, and a disagreeing balance is the
+    // finding this product exists to surface — not a reason to withhold the match that surfaces it.
+    ].sort().join('~') + '|c=0.95|s=confirmed',
   ])
   const tp = [...actual].filter(sig => expected.has(sig)).length
   const precision = actual.size === 0 ? 1 : tp / actual.size
@@ -166,7 +172,9 @@ test('measurement: real-sample match profile (structure-only)', { skip: !hasBin(
     const oversized95 = oversized.filter(m => m.confidence === 0.95).length
     for (const m of matches) {
       assert.ok(m.tradelineIds.length >= 2, 'proposed matches must cover at least 2 tradelines')
-      assert.equal(m.state, m.confidence >= 0.9 ? 'proposed' : 'split')
+      // At or above the publishable-confidence floor a group is unambiguous and confirms itself;
+      // below it the group is genuinely ambiguous and waits for a consumer decision.
+      assert.equal(m.state, m.confidence >= 0.9 ? 'confirmed' : 'split')
     }
     assert.equal(conf95 + conf72, matches.length, 'all matches should fall into the current two confidence buckets')
     assert.equal(oversized95, 0, 'oversized collision groups must never remain at 0.95 after hardening')

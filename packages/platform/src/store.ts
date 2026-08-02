@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import type {
   Id, User, Session, Workspace, AuthorizationRecord, Upload, CanonicalReport,
   MatchGroup, Analysis, ConsumerReport, ExportArtifact, DeletionJob, AuditEvent, Consent, ReportPresentationProfile,
+  ConsumerIdentity,
 } from './entities.js'
 
 /**
@@ -44,6 +45,12 @@ export interface PlatformStore {
 
   getAuthorizationByUser(userId: Id): Promise<AuthorizationRecord | undefined>
   createAuthorization(record: AuthorizationRecord): Promise<void>
+
+  /** Attested identity is 1:1 with its user but lives in its own row rather than users.payload_json:
+   *  it carries an SSN fragment and a date of birth, and a dedicated row makes its deletion an
+   *  explicitly auditable step rather than a side effect of deleting the account record. */
+  getConsumerIdentity(userId: Id): Promise<ConsumerIdentity | undefined>
+  saveConsumerIdentity(identity: ConsumerIdentity): Promise<void>
 
   getUpload(id: Id): Promise<Upload | undefined>
   listUploadsForUser(userId: Id): Promise<Upload[]>
@@ -120,6 +127,7 @@ export class InMemoryStore implements PlatformStore {
   private workspaces = new Map<Id, Workspace>()
   private authorizations = new Map<Id, AuthorizationRecord>()
   private authorizationByUser = new Map<Id, Id>()
+  private consumerIdentities = new Map<Id, ConsumerIdentity>()
   private uploads = new Map<Id, Upload>()
   private uploadByHash = new Map<string, Id>()
   private reports = new Map<Id, CanonicalReport>()
@@ -154,6 +162,9 @@ export class InMemoryStore implements PlatformStore {
 
   async getAuthorizationByUser(userId: Id) { const id = this.authorizationByUser.get(userId); return id ? structuredClone(this.authorizations.get(id)) : undefined }
   async createAuthorization(record: AuthorizationRecord) { this.authorizations.set(record.id, structuredClone(record)); this.authorizationByUser.set(record.userId, record.id) }
+
+  async getConsumerIdentity(userId: Id) { const item = this.consumerIdentities.get(userId); return item ? structuredClone(item) : undefined }
+  async saveConsumerIdentity(identity: ConsumerIdentity) { this.consumerIdentities.set(identity.userId, structuredClone(identity)) }
 
   async getUpload(id: Id) { const u = this.uploads.get(id); return u ? structuredClone(u) : undefined }
   async listUploadsForUser(userId: Id) { return [...this.uploads.values()].filter(item => item.userId === userId).map(item => structuredClone(item)) }
@@ -196,6 +207,7 @@ export class InMemoryStore implements PlatformStore {
     for (const [id, item] of this.sessions) if (item.userId === userId) this.sessions.delete(id)
     for (const [id, item] of this.workspaces) if (item.userId === userId) this.workspaces.delete(id)
     for (const [id, item] of this.authorizations) if (item.userId === userId) { this.authorizations.delete(id); this.authorizationByUser.delete(userId) }
+    this.consumerIdentities.delete(userId)
     for (const [key, item] of this.tokens) if (item.userId === userId) this.tokens.delete(key)
     this.auditEvents = this.auditEvents.filter(event => event.actorId !== userId && event.subjectId !== userId)
   }

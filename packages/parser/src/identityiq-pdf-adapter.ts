@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
-import type { Bureau, ParserInquiry, ParserPaymentHistoryCell, ParserReport, ParserScore, ParserTradeline, ParserValue } from './types.js'
+import type { Bureau, ParserInquiry, ParserPaymentHistoryCell, ParserPersonalInformation, ParserReport, ParserScore, ParserTradeline, ParserValue } from './types.js'
+import { emptyPersonalInformation } from './types.js'
 import { bureauForX, detectBureauColumns, nearestBureau, CREDITOR_X_MAX, xCenter, type Word } from './positional-types.js'
 
 /**
@@ -450,14 +451,291 @@ function findConsumerDisplayName(words: Word[]): ParserValue<string>[] {
   return []
 }
 
+type PersonalFieldName = keyof ParserPersonalInformation
+
+const PERSONAL_FIELD_LABELS: ReadonlyArray<{ field: PersonalFieldName; re: RegExp }> = [
+  { field: 'names', re: /^name:?$/ },
+  { field: 'alsoKnownAs', re: /^(also\s+known\s+as|aka|former\s+name\(?s?\)?|former):?$/ },
+  { field: 'datesOfBirth', re: /^(date\s+of\s+birth|birth\s+date|year\s+of\s+birth):?$/ },
+  { field: 'currentAddresses', re: /^current\s+address(\(?es\)?)?:?$/ },
+  { field: 'previousAddresses', re: /^(previous|former)\s+address(\(?es\)?)?:?$/ },
+  { field: 'employers', re: /^(employers?|employment):?$/ },
+  { field: 'socialSecurityFragments', re: /^(ssn|social\s+security(\s+number)?):?$/ },
+]
+
+const MONTH_NAMES = ['january', 'february', 'march', 'april', 'may', 'june', 'july', 'august', 'september', 'october', 'november', 'december']
+
+/**
+ * Normalizes a displayed date of birth to the precision the report actually states.
+ *
+ * IdentityIQ shows this field at three different precisions depending on bureau and template
+ * (`1985`, `3/1985`, `03/17/1985`). Padding a year-only value out to a full date would invent
+ * a month and day the report never claimed, and would then produce a variance Finding against
+ * the consumer's real birthday — a fabricated discrepancy. The comparison is prefix-based
+ * instead, so a year-only value is compared only as a year.
+ */
+function normalizeDateOfBirth(display: string): string | null {
+  const text = display.trim().replace(/\s+/g, ' ')
+  const full = /^(\d{1,2})[/-](\d{1,2})[/-](\d{4})$/.exec(text)
+  if (full) {
+    const month = Number(full[1]); const day = Number(full[2])
+    if (month < 1 || month > 12 || day < 1 || day > 31) return null
+    return `${full[3]}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`
+  }
+  const iso = /^(\d{4})-(\d{2})-(\d{2})$/.exec(text)
+  if (iso) return text
+  const monthYear = /^(\d{1,2})[/-](\d{4})$/.exec(text)
+  if (monthYear) {
+    const month = Number(monthYear[1])
+    if (month < 1 || month > 12) return null
+    return `${monthYear[2]}-${String(month).padStart(2, '0')}`
+  }
+  const namedMonth = /^([a-z]+)\s+(\d{4})$/i.exec(text)
+  if (namedMonth) {
+    const index = MONTH_NAMES.indexOf((namedMonth[1] ?? '').toLowerCase())
+    if (index >= 0) return `${namedMonth[2]}-${String(index + 1).padStart(2, '0')}`
+  }
+  const yearOnly = /^(\d{4})$/.exec(text)
+  if (yearOnly) {
+    const year = Number(yearOnly[1])
+    return year >= 1900 && year <= new Date().getUTCFullYear() ? yearOnly[1] ?? null : null
+  }
+  return null
+}
+
+/** Collapses a displayed address to a comparison key: uppercase, punctuation dropped, and the
+ *  common street-suffix abbreviations unified so "123 MAIN ST." and "123 Main Street" agree. */
+export function normalizeAddressForComparison(display: string): string {
+  const suffixes: Record<string, string> = {
+    street: 'st', avenue: 'ave', boulevard: 'blvd', drive: 'dr', road: 'rd', lane: 'ln', court: 'ct',
+    place: 'pl', terrace: 'ter', parkway: 'pkwy', circle: 'cir', highway: 'hwy', apartment: 'apt',
+    suite: 'ste', north: 'n', south: 's', east: 'e', west: 'w', northeast: 'ne', northwest: 'nw',
+    southeast: 'se', southwest: 'sw',
+  }
+  return display
+    .toUpperCase()
+    .replace(/[.,#]/g, ' ')
+    .split(/\s+/)
+    .filter(Boolean)
+    .map(token => (suffixes[token.toLowerCase()] ?? token).toUpperCase())
+    .join(' ')
+    .trim()
+}
+
+/**
+ * Personal Information reader (tri-bureau).
+ *
+ * The layout this handles, verified against the authorized samples rather than assumed:
+ *   - The section heading is a bare `Personal Information` row; the section ends at the next
+ *     `Back to Top` row, which IdentityIQ puts on every section heading.
+ *   - Labels sit well to the left of the first bureau column, so label and value are separated by
+ *     x-position, not by row. (A left-edge test on xMin does NOT work: TransUnion values start at
+ *     x≈202 while labels end at x≈157, and several value words begin left of any fixed xMin cut.)
+ *   - A label is vertically CENTERED against a multi-row value, so the label row is in the middle
+ *     of its own block, not at the top. Continuation rows are therefore assigned to the nearest
+ *     label that accepts continuations — single-line fields such as Name and Date of Birth never
+ *     do, which is what keeps an address's first line from attaching to the date above it.
+ *   - Addresses wrap across three or four rows with no per-address delimiter, so they are
+ *     segmented per bureau column at ZIP boundaries. Anything not terminated by a ZIP is
+ *     discarded rather than emitted as a partial address.
+ */
+
+/** Distance left of the first bureau column within which a word is a label, not a value. Set from
+ *  the observed gap in the samples (labels end ≈157, values begin ≈202) with margin on both sides. */
+const PERSONAL_LABEL_MARGIN = 60
+const ZIP_TOKEN = /^\d{5}(-\d{4})?$/
+const DATE_TOKEN = /^\d{1,2}\/(\d{1,2}\/)?\d{2,4}$/
+/** Page furniture that lands inside the section's row range on a page break. */
+const PAGE_FURNITURE = /^(https?:\/\/|\d{1,2}\/\d{1,2}\/\d{2},\s|\d+\/\d+$)/
+
+type PersonalLabel = { field: PersonalFieldName; acceptsContinuation: boolean }
+
+const PERSONAL_LABELS: ReadonlyArray<{ re: RegExp } & PersonalLabel> = [
+  { re: /^name$/, field: 'names', acceptsContinuation: false },
+  { re: /^(also\s+known\s+as|aka|former(\s+names?)?)$/, field: 'alsoKnownAs', acceptsContinuation: false },
+  { re: /^(date\s+of\s+birth|birth\s+date|year\s+of\s+birth)$/, field: 'datesOfBirth', acceptsContinuation: false },
+  { re: /^(ssn|social\s+security(\s+number)?)$/, field: 'socialSecurityFragments', acceptsContinuation: false },
+  { re: /^(current|previous|former)\s+address(\(?es\)?)?$/, field: 'currentAddresses', acceptsContinuation: true },
+  { re: /^(employers?|employment)$/, field: 'employers', acceptsContinuation: true },
+]
+
+function isPersonalSectionAnchor(row: Row): boolean {
+  return /^personal\s+information$/i.test(row.words.map(word => word.text).join(' ').trim())
+}
+
+function personalSectionColumns(rows: Row[], anchorIndex: number): { headerIndex: number; bureauOf: (x: number) => Bureau | null } | undefined {
+  for (let index = anchorIndex + 1; index < Math.min(rows.length, anchorIndex + 10); index += 1) {
+    const row = rows[index]
+    if (!row) continue
+    const headerWords = row.words.filter(word => /^(transunion|experian|equifax)$/i.test(word.text))
+    const columns = new Map<Bureau, number>()
+    for (const word of headerWords) {
+      const bureau = word.text.toLowerCase() as Bureau
+      if (columns.has(bureau)) { columns.clear(); break }
+      columns.set(bureau, xCenter(word))
+    }
+    if (columns.size !== 3) continue
+    const anchors = [...columns].map(([bureau, x]) => ({ bureau, x }))
+    const firstColumnX = Math.min(...anchors.map(column => column.x))
+    return { headerIndex: index, bureauOf: (x: number) => (x < firstColumnX - PERSONAL_LABEL_MARGIN ? null : nearestBureau(x, anchors)) }
+  }
+  return undefined
+}
+
+/** Splits one bureau column's accumulated address tokens into complete addresses. A segment is
+ *  emitted only when a ZIP closes it; reported-on dates interleaved between addresses are dropped
+ *  so they cannot prefix the following address. */
+function segmentAddresses(tokens: string[]): string[] {
+  const addresses: string[] = []
+  let current: string[] = []
+  for (const token of tokens) {
+    if (DATE_TOKEN.test(token)) continue
+    current.push(token)
+    if (!ZIP_TOKEN.test(token)) continue
+    if (current.length >= 3) addresses.push(current.join(' '))
+    current = []
+  }
+  return addresses
+}
+
+function parseIdentityIqPersonalInformation(words: Word[]): ParserPersonalInformation {
+  const result = emptyPersonalInformation()
+  const rows = groupRows(words)
+  const anchorIndex = rows.findIndex(isPersonalSectionAnchor)
+  if (anchorIndex < 0) return result
+  const columns = personalSectionColumns(rows, anchorIndex)
+  if (!columns) return result
+  const { bureauOf } = columns
+
+  const sectionRows: Row[] = []
+  for (const row of rows.slice(columns.headerIndex + 1)) {
+    const text = row.words.map(word => word.text).join(' ').trim()
+    if (/back to top/i.test(text)) break
+    if (PAGE_FURNITURE.test(text)) continue
+    sectionRows.push(row)
+  }
+
+  const labelOf = (row: Row): PersonalLabel | undefined => {
+    const labelText = row.words.filter(word => bureauOf(xCenter(word)) === null).map(word => word.text).join(' ').replace(/\s+/g, ' ').trim()
+    if (!labelText.includes(':')) return undefined
+    const name = labelText.slice(0, labelText.indexOf(':')).trim().toLowerCase()
+    return PERSONAL_LABELS.find(entry => entry.re.test(name))
+  }
+
+  const labelled = sectionRows.map(row => ({ row, label: labelOf(row) }))
+  const continuationHosts = labelled.filter((entry): entry is { row: Row; label: PersonalLabel } => entry.label?.acceptsContinuation === true)
+
+  // Single-line fields read from their own row only.
+  for (const { row, label } of labelled) {
+    if (!label || label.acceptsContinuation) continue
+    const buckets = bureauWordBuckets(row, bureauOf)
+    for (const bureau of ['transunion', 'experian', 'equifax'] as const) {
+      const value = personalValue(label.field, bureau, joined(buckets[bureau]), row.page, row.yMin)
+      if (value) result[label.field].push(value)
+    }
+  }
+
+  // Continuation-accepting fields collect their own row plus every unlabelled row nearer to them
+  // than to any other continuation-accepting label.
+  const hostFor = (row: Row): { row: Row; label: PersonalLabel } | undefined => {
+    let best: { host: { row: Row; label: PersonalLabel }; distance: number } | undefined
+    for (const host of continuationHosts) {
+      if (host.row.page !== row.page) continue
+      const distance = Math.abs(host.row.yMin - row.yMin)
+      if (!best || distance < best.distance) best = { host, distance }
+    }
+    return best?.host
+  }
+
+  const addressTokens = new Map<Bureau, string[]>()
+  const addressSource = new Map<Bureau, { page: number; yMin: number }>()
+  for (const { row, label } of labelled) {
+    const host = label ? (label.acceptsContinuation ? { row, label } : undefined) : hostFor(row)
+    if (!host) continue
+    const buckets = bureauWordBuckets(row, bureauOf)
+    for (const bureau of ['transunion', 'experian', 'equifax'] as const) {
+      const bucket = buckets[bureau]
+      if (!bucket?.length) continue
+      if (host.label.field === 'employers') {
+        // One employer per row: the report gives no delimiter between names on separate rows, so
+        // joining them across rows would fuse two employers into one value.
+        const value = personalValue('employers', bureau, joined(bucket), row.page, row.yMin)
+        if (value) result.employers.push(value)
+        continue
+      }
+      addressTokens.set(bureau, [...(addressTokens.get(bureau) ?? []), ...bucket.map(word => word.text)])
+      if (!addressSource.has(bureau)) addressSource.set(bureau, { page: row.page, yMin: row.yMin })
+    }
+  }
+
+  for (const bureau of ['transunion', 'experian', 'equifax'] as const) {
+    const source = addressSource.get(bureau)
+    if (!source) continue
+    // The report lists a bureau's current address first and its former addresses after it. That
+    // ordering is the only reliable current/previous signal here: the "Previous Address(es)" label
+    // is centred against its block and so sits BELOW rows that already belong to it.
+    const addresses = segmentAddresses(addressTokens.get(bureau) ?? [])
+    addresses.forEach((address, index) => {
+      const field: PersonalFieldName = index === 0 ? 'currentAddresses' : 'previousAddresses'
+      const value = personalValue(field, bureau, address, source.page, source.yMin + index)
+      if (value) result[field].push(value)
+    })
+  }
+  return result
+}
+
+/** The collection name is plural; the value's own `field` names one value, because it is what a
+ *  reader sees in a finding's evidence table. */
+const PERSONAL_VALUE_FIELD: Record<PersonalFieldName, string> = {
+  names: 'name', alsoKnownAs: 'alsoKnownAs', datesOfBirth: 'dateOfBirth',
+  currentAddresses: 'currentAddress', previousAddresses: 'previousAddress',
+  employers: 'employer', socialSecurityFragments: 'ssnLastFour',
+}
+
+function personalValue(field: PersonalFieldName, bureau: Bureau, display: string, page: number, yMin: number): ParserValue<string> | undefined {
+  const clean = display.replace(/\s+/g, ' ').trim()
+  // A dash is how these reports render "nothing on file". It is an absence, not a value.
+  if (!clean || /^(none|n\/a|not reported|-{1,3}|–|—)$/i.test(clean)) return undefined
+  const valueField = PERSONAL_VALUE_FIELD[field]
+  const locate = (normalized: string | null, confidence: number, state: ParserValue<string>['state']): ParserValue<string> => ({
+    bureau, field: valueField, normalized, originalDisplay: clean, state, confidence,
+    source: { kind: 'element', locator: `pdf:p${page}:y${Math.round(yMin)}:${bureau}:${valueField}`, snippet: clean.slice(0, 80) },
+  })
+  if (field === 'datesOfBirth') {
+    const normalized = normalizeDateOfBirth(clean)
+    return normalized ? locate(normalized, FIELD_CONFIDENCE, 'known') : locate(null, 0, 'unknown')
+  }
+  if (field === 'socialSecurityFragments') {
+    // Only the trailing four digits of an already-masked display are retained. A display carrying
+    // more than four digits is treated as unreadable rather than trimmed: the redaction boundary
+    // upstream owns that case, and trimming here would quietly paper over its failure.
+    const digits = clean.replace(/\D/g, '')
+    if (digits.length !== 4) return locate(null, 0, 'unknown')
+    return locate(digits, FIELD_CONFIDENCE, 'known')
+  }
+  if (field === 'currentAddresses' || field === 'previousAddresses') {
+    return /\d/.test(clean) ? locate(clean, FIELD_CONFIDENCE, 'known') : locate(null, 0, 'unknown')
+  }
+  if (field === 'employers') {
+    // An employer is a name. A trailing ZIP row from the address block above can land in this
+    // block when the two sit close together, and "18301" is not an employer — reject anything
+    // without a word in it rather than publish a postal code as an employment record.
+    return /[A-Za-z]{2}/.test(clean) ? locate(clean, FIELD_CONFIDENCE, 'known') : undefined
+  }
+  // A digit in a person's name is a column-bleed or a stray token, not a name.
+  if (/\d/.test(clean) && (field === 'names' || field === 'alsoKnownAs')) return locate(null, 0, 'unknown')
+  return locate(clean, FIELD_CONFIDENCE, 'known')
+}
+
 export function parseIdentityIqPdf(words: Word[]): ParserReport {
   const accountBlockTradelines = buildTradelinesFromAccountBlocks(words)
   const identity = findConsumerDisplayName(words)
+  const personalInformation = parseIdentityIqPersonalInformation(words)
   const supportedBureaus = new Set(accountBlockTradelines.map(line => line.bureau))
   const scores = parseIdentityIqScores(words)
   const inquiries = parseIdentityIqInquiries(words)
   if (supportedBureaus.has('transunion') && supportedBureaus.has('experian') && supportedBureaus.has('equifax')) {
-    return { provider: 'identityiq', template: 'identityiq-pdf-v1', reportDate: null, identity, tradelines: accountBlockTradelines, inquiries, scores }
+    return { provider: 'identityiq', template: 'identityiq-pdf-v1', reportDate: null, identity, personalInformation, tradelines: accountBlockTradelines, inquiries, scores }
   }
 
   // Some older IdentityIQ layouts omit an account-block balance in one column while still
@@ -467,5 +745,5 @@ export function parseIdentityIqPdf(words: Word[]): ParserReport {
   // require the omitted fields suppress instead of treating the row as fully reconstructed.
   const fallbackTradelines = buildTradelinesFromBalanceRows(words)
     .filter(line => !supportedBureaus.has(line.bureau))
-  return { provider: 'identityiq', template: 'identityiq-pdf-v1', reportDate: null, identity, tradelines: [...accountBlockTradelines, ...fallbackTradelines], inquiries, scores }
+  return { provider: 'identityiq', template: 'identityiq-pdf-v1', reportDate: null, identity, personalInformation, tradelines: [...accountBlockTradelines, ...fallbackTradelines], inquiries, scores }
 }

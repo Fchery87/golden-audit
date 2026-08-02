@@ -46,8 +46,10 @@ Then update `wrangler.jsonc` with the real R2 `bucket_name`.
 ```bash
 npx wrangler d1 execute golden-audit-pilot --local --file=./database/migrations/003_pilot_pages_state.sql
 npx wrangler d1 execute golden-audit-pilot --local --file=./database/migrations/004_consumer_persistence.sql
+npx wrangler d1 execute golden-audit-pilot --local --file=./database/migrations/005_attested_identity.sql
 npx wrangler d1 execute golden-audit-pilot --remote --file=./database/migrations/003_pilot_pages_state.sql
 npx wrangler d1 execute golden-audit-pilot --remote --file=./database/migrations/004_consumer_persistence.sql
+npx wrangler d1 execute golden-audit-pilot --remote --file=./database/migrations/005_attested_identity.sql
 npx wrangler d1 execute golden-audit-pilot --remote --command="SELECT name FROM sqlite_master WHERE type='table' AND name IN ('pilot_state', 'consumer_reports', 'authorizations');"
 ```
 
@@ -156,6 +158,7 @@ Success criteria:
 ## Step 4 — apply the pilot D1 schema
 This repo uses:
 - `database/migrations/003_pilot_pages_state.sql`
+- `database/migrations/005_attested_identity.sql` — `consumer_identities`; must be applied before the consumer surface is deployed, since uploads are gated on an attested identity
 
 Apply locally:
 ```bash

@@ -22,6 +22,7 @@ const required = [
   'database/migrations/002_product_platform.sql',
   'database/migrations/003_pilot_pages_state.sql',
   'database/migrations/004_consumer_persistence.sql',
+  'database/migrations/005_attested_identity.sql',
   'wrangler.jsonc',
 ]
 await Promise.all(required.map(path => access(path)))

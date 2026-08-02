@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import { existsSync, readFileSync } from 'node:fs'
 import { execSync } from 'node:child_process'
 import { CreditAnalysisPlatform } from '../packages/platform/src/index.js'
+import { attestTestIdentity } from './support-identity.js'
 
 // Ticket 14 — measurement harness, part 2: real-sample structural characterization.
 // Runs the full chain on each real IdentityIQ PDF and profiles the findings by balance-difference
@@ -66,7 +67,7 @@ test('measurement: real-sample finding magnitude distribution (structure-only)',
     })
     const inviteCode = await p.issueInvite()
     const { sessionId } = await p.register({ email: 'measure@example.com', password, inviteCode })
-    const ws = await p.recordConsent(sessionId, consent); await p.acceptAuthorization(sessionId)
+    const ws = await p.recordConsent(sessionId, consent); await attestTestIdentity(p, sessionId); await p.acceptAuthorization(sessionId)
     const init = await p.initializeUpload(sessionId, ws.id)
     const up = await p.completeUpload({ uploadId: init.id, token: init.token, fileName: path.split('/').pop() ?? 'r.pdf', mediaType: 'application/pdf', bytes: readFileSync(path) })
     const report = await p.parseReport(sessionId, up.id)

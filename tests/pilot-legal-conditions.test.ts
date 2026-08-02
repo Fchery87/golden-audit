@@ -2,6 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { CreditAnalysisPlatform, AUTHORIZATION_TEXT, AUTHORIZATION_VERSION, RETENTION_POLICY } from '../packages/platform/src/index.js'
 import { assertSafeConsumerOutput, FORBIDDEN_DISPUTE_TERMS, FORBIDDEN_UPL_TERMS } from '../packages/output-guard/src/index.js'
+import { attestTestIdentity } from './support-identity.js'
 
 // Ticket 12 — pilot legal conditions (derived from preliminary FCRA counsel opinion).
 // Each test maps to a specific counsel condition (Q-L1 … Q-L5). These are the enforceable-in-code
@@ -30,6 +31,7 @@ async function onboard(platform: CreditAnalysisPlatform, email: string) {
   const inviteCode = await platform.issueInvite()
   const { sessionId } = await platform.register({ email, password, inviteCode })
   const workspace = await platform.recordConsent(sessionId, consent)
+  await attestTestIdentity(platform, sessionId)
   await platform.acceptAuthorization(sessionId)
   return { sessionId, workspaceId: workspace.id }
 }
@@ -50,6 +52,7 @@ test('Q-L3: processing is gated on written authorization (completeUpload throws 
   const inviteCode = await platform.issueInvite()
   const { sessionId } = await platform.register({ email: 'auth@example.com', password, inviteCode })
   const workspace = await platform.recordConsent(sessionId, consent)
+  await attestTestIdentity(platform, sessionId)
   const init = await platform.initializeUpload(sessionId, workspace.id)
   await assert.rejects(() => platform.completeUpload({ uploadId: init.id, token: init.token, fileName: 'r.html', mediaType: 'text/html', bytes: markerBytes() }), /Written authorization required/)
   const auth = await platform.acceptAuthorization(sessionId)

@@ -10,7 +10,7 @@ type ReviewedRuleDefinition = readonly [name: string, requiredInputs: string[], 
  * `scripts/verify-reviewed-content.ts` validates the review metadata before builds.
  */
 export const reviewedCaliforniaCatalog = {
-  catalogVersion: 'us-ca-education-2026-07-31.1',
+  catalogVersion: 'us-ca-education-2026-08-02.1',
   jurisdiction: 'US-CA',
   approval: reviewedContentApproval,
   authorities: [
@@ -41,8 +41,38 @@ export const reviewedCaliforniaCatalog = {
       limitations: ['A source can explain reporting practices without showing why a particular value appears in this report.'],
       status: 'published', history: [],
     },
+    {
+      id: 'authority-cfpb-report-errors',
+      title: 'CFPB: What should I do if I find an error on my credit report?',
+      citation: 'Consumer Financial Protection Bureau, credit report error FAQ',
+      sourceUrl: 'https://www.consumerfinance.gov/ask-cfpb/what-should-i-do-if-i-find-an-error-on-my-credit-report-en-1319/',
+      jurisdiction: 'US-CA', effectiveFrom: '2026-07-31', permittedUse: 'education',
+      limitations: ['This source explains a general process and does not evaluate any entry in an individual report.'],
+      status: 'published', history: [],
+    },
+    {
+      id: 'authority-ftc-identity-theft',
+      title: 'FTC: Identity Theft',
+      citation: 'Federal Trade Commission, identity theft resources',
+      sourceUrl: 'https://consumer.ftc.gov/features/identity-theft',
+      jurisdiction: 'US-CA', effectiveFrom: '2026-07-31', permittedUse: 'education',
+      limitations: ['General identity-theft guidance; it does not establish that any displayed detail is wrong.'],
+      status: 'published', history: [],
+    },
   ],
   modules: [
+    {
+      id: 'primer-personal-information', kind: 'section-primer', section: 'personal-information', title: 'Why the personal-information section matters',
+      body: 'Each reporting company keeps its own list of names, dates of birth, and addresses for you, and each list is built from what furnishers sent. This reading compares that list against the details you entered so you can see anything you do not recognize. Old addresses and small name variations are common; a detail belonging to someone else is not.',
+      authorityIds: ['authority-cfpb-credit-reports'], jurisdiction: 'US-CA', effectiveFrom: '2026-07-31', permittedUse: 'education',
+      limitations: ['A difference between a displayed detail and your own records does not by itself establish an error.'], status: 'published', history: [],
+    },
+    {
+      id: 'module-identity-details', kind: 'finding-module', section: 'finding', title: 'When a personal detail does not look like yours',
+      body: 'Identifying details reach a report from many furnishers over many years, so variations happen. A detail you do not recognize at all is worth more attention than a formatting difference, because it can mean records belonging to another person were attached to your file. Compare the displayed detail against your identification documents and raise anything unexplained with the reporting company that displayed it.',
+      authorityIds: ['authority-cfpb-report-errors', 'authority-ftc-identity-theft'], jurisdiction: 'US-CA', effectiveFrom: '2026-07-31', permittedUse: 'education',
+      limitations: ['This reading compares displayed details with the details you provided; it cannot confirm which is correct.'], status: 'published', history: [],
+    },
     {
       id: 'primer-tradelines', kind: 'section-primer', section: 'tradelines', title: 'How to read a tradeline',
       body: 'A tradeline is one account entry in a credit report. This reading compares only the fields shown for matched account entries and identifies where more records may help you verify what is displayed.',
@@ -104,9 +134,17 @@ export const reviewedCaliforniaCatalog = {
     ['revolving-without-credit-limit', ['accountType', 'creditLimit'], 'observed-fact', ['Some furnishers report high credit rather than a current limit'], 'module-report-differences'],
     ['duplicate-tradeline-within-bureau', ['maskedAccount'], 'verification-recommended', ['Separate accounts can share similar identifying details'], 'module-duplicate-tradeline'],
     ['partial-furnishing-observation', ['maskedAccount'], 'observed-fact', ['Not every account is expected to appear on all three bureaus'], 'module-partial-furnishing'],
+    ['identity-name-not-attested', ['name'], 'verification-recommended', ['A former or shortened name can appear without anything being wrong'], 'module-identity-details'],
+    ['identity-date-of-birth-not-attested', ['dateOfBirth'], 'verification-recommended', ['A report may show only a year or a month and year, which is compared at that precision'], 'module-identity-details'],
+    ['identity-ssn-fragment-not-attested', ['ssnLastFour'], 'verification-recommended', ['Only the last four displayed digits are compared'], 'module-identity-details'],
+    ['identity-address-not-attested', ['currentAddress'], 'observed-fact', ['Reports retain former addresses for years'], 'module-identity-details'],
+    ['cross-bureau-identity-name-difference', ['name'], 'observed-fact', ['Reporting companies receive identifying details from different furnishers'], 'module-identity-details'],
   ] satisfies ReviewedRuleDefinition[]).map(([name, requiredInputs, classification, limitations, moduleId]) => ({
     id: `rule-${name}`, name, requiredInputs, classification, limitations,
     jurisdiction: 'US-CA', effectiveFrom: '2026-07-31', minimumConfidence: 0.9,
-    authorityIds: ['authority-cfpb-credit-reports'], educationModuleIds: [moduleId], testCases: [`catalog-${name}`], status: 'published', history: [],
+    authorityIds: name.startsWith('identity-') || name === 'cross-bureau-identity-name-difference'
+      ? ['authority-cfpb-report-errors', 'authority-ftc-identity-theft']
+      : ['authority-cfpb-credit-reports'],
+    educationModuleIds: [moduleId], testCases: [`catalog-${name}`], status: 'published', history: [],
   })),
 } satisfies ReviewedGovernanceCatalog

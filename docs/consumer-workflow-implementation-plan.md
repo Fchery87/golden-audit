@@ -327,6 +327,92 @@ The highest-uncertainty item gated the most work, so it went first.
 - Browser recovery and email-verification screens are provided. The Node development server can use a local, access-restricted scratch outbox only when explicitly configured; it never sends real email by default.
 - The Cloudflare sender domain, Email Service review/DPA, WAF configuration, preview delivery validation, and privacy/counsel approval remain required release operations; see `docs/cloudflare-email-service-checklist.md`.
 
+### Phase 7 — Intake, delivery, and the identity check category — implementation complete (2026-08-02)
+
+**What prompted it.** The product owner reviewed the running application and found that uploading a
+report produced a wall of per-value confirmations instead of a reading. That screen was the
+`ValueReview` gate introduced in `f6bd392 feat(report): harden consumer review workflow`. It is not
+in this plan; Part 5 below in fact directs the *removal* of "Consumer review / corrections" from
+`data-flow.md` as unimplemented. A hardening commit revived a discarded idea and promoted it to a
+mandatory blocking gate in front of analysis.
+
+**Why it was as large as it was.** `reviewableValues()` returned every extracted value with
+`state === 'known'` — via `allValues()`, that is identity, addresses, employers, every inquiry
+triple, scores and scales, and per tradeline the creditor, masked account, type, the money trio,
+status, opened, updated, DOFD, **all 24 payment-history cells**, remarks, and special comment codes.
+Roughly 34 values per bureau-row; ~2,500 on a tri-bureau report with 25 accounts. `reviewValue()`
+required a non-empty typed reason for each and `completeReview()` refused to advance until every one
+had a decision.
+
+**The deeper problem it created.** This architecture already handles uncertainty through calibrated
+confidence and suppression: a value below the publishable floor produces no Finding, automatically.
+The gate overrode that with a human confirmation the consumer could not give more reliably than the
+evidence already did — and a confirmation collected that way launders parser error into
+consumer-attested data.
+
+**D13 · Bounded prompting, unbounded correction.** We only *ask* about extraction exceptions
+(parser-failed, or read below the publishable floor). We *accept* a correction to any value, because
+a consumer reading their own report is the ground truth for it. Corrections are post-delivery and
+re-run analysis. `PUBLISHABLE_CONFIDENCE` is now a named constant rather than a repeated literal.
+
+**D14 · Ambiguity suppresses a check; it never withholds the reading.** `proposeMatches` auto-confirms
+unambiguous groups (same creditor, identifying masked account, one entry per bureau, no collision).
+Oversized collision sets and same-bureau duplicates stay unconfirmed, and `runAnalysis` records a
+`suppressed` audit row naming each check that did not run instead of throwing. A consumer with one
+ambiguous account group still gets the other twenty-nine accounts read, and can resolve the group
+afterwards via `listPendingMatches` to unlock the rest.
+
+*Correction to the matching heuristic, made here:* balance agreement was part of the confidence
+score, so a two-bureau group whose balances **differed** scored 0.72 and required manual
+confirmation. That is exactly the case the flagship cross-bureau rule exists to report — the
+heuristic was gating the product's primary finding behind a manual step. Balance agreement is now a
+recorded signal only; identification comes from creditor + masked account + one entry per bureau.
+
+**D15 · Identity intake, because the identity checks are impossible without it.** Part 2's check
+catalog lists an Identity row (name / SSN / DOB / address variance; mixed-file indicators) and we
+implemented none of it — not from lack of parsing, but because a report compared only with itself
+cannot show that the name on it is not the reader's name. Registration now collects full name, date
+of birth, SSN **last four only**, and current plus previous addresses, under an accuracy declaration
+(`IDENTITY_ATTESTATION_VERSION`) distinct from both Consent and the written authorization. The
+attestation is what makes a variance Finding defensible: the consumer, not the parser, supplied the
+value being compared. Five evaluators were added (`identity-name-not-attested`,
+`identity-date-of-birth-not-attested`, `identity-ssn-fragment-not-attested`,
+`identity-address-not-attested`, `cross-bureau-identity-name-difference`), all suppressing with an
+explicit reason when no attestation exists.
+
+**Parser: the Personal Information section**, verified against all four authorized samples rather
+than assumed. Three layout facts each broke a plausible first implementation: the label is
+*vertically centered* against a multi-row value (so it is not the block's first row); label and
+value separate by x-center, not by a left-edge cut (TransUnion values begin left of any fixed xMin
+boundary); and addresses wrap over three or four rows with no delimiter, so they are segmented per
+bureau column at ZIP boundaries with interleaved reported-on dates dropped. Current vs previous
+comes from the bureau's own ordering, because the "Previous Address(es)" label sits *below* rows
+that already belong to it. Names, dates of birth (at each bureau's stated precision — one bureau
+routinely gives a bare year), addresses, and employers now extract on every sample.
+
+**Report surface**: an audit summary (tri-bureau scores, accounts, negative markers, cross-bureau
+difference count, utilization) counted **per account rather than per bureau entry**, a personal-
+information section labeled against the attested identity, and a reimport diff against the previous
+reading comparing only fields readable in *both* — a field readable last time and not this time is a
+change in our extraction, not in the consumer's file.
+
+**Verification:** typecheck, 124/124 tests (was 105; 19 added covering intake validation, the
+identity evaluators, the delivery path, the audit summary, the reimport diff, and the personal-
+information reader against both a layout-faithful fixture and the real samples), and the client
+production build.
+
+**Blocked, and stated rather than worked around:** `npm run verify:content` fails. New education
+content (two authorities, two modules, five rules) changed `reviewed-content.ts`, and that script
+pins the file to a named reviewer's approval commit. `catalogSha256` has been regenerated
+(`npx tsx scripts/print-catalog-digest.ts`); `reviewedCommit` still needs to be replaced with the
+SHA of the owner's approval commit. **Separately and pre-existing:** the currently recorded
+`reviewedCommit` (`e3047aa…`) is not a reachable object in this repository, so this gate was already
+failing before this phase — it needs re-establishing, not merely updating.
+
+**Also requiring human sign-off before launch, unchanged by this phase:** the date of birth and SSN
+fragment are new personal-information categories. `docs/privacy-notice-draft.md` records them and
+flags the CPRA sensitive-personal-information question; that is a privacy/counsel decision.
+
 ---
 
 ## Part 5 — Documents to update

@@ -1,7 +1,7 @@
 import type { D1Database } from '@cloudflare/workers-types'
 import { randomUUID, createHash } from 'node:crypto'
 import type {
-  Id, User, Session, Workspace, AuthorizationRecord, Upload, CanonicalReport,
+  Id, User, Session, Workspace, AuthorizationRecord, ConsumerIdentity, Upload, CanonicalReport,
   MatchGroup, Analysis, ConsumerReport, ExportArtifact, DeletionJob, AuditEvent,
   PlatformStore, Consent, ReportPresentationProfile,
 } from '../../../../packages/platform/src/index.js'
@@ -40,6 +40,7 @@ export class D1PlatformStore implements PlatformStore {
       `CREATE TABLE IF NOT EXISTS workspaces (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, created_at TEXT NOT NULL)`,
       `CREATE TABLE IF NOT EXISTS authorizations (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, payload_json TEXT NOT NULL)`,
       `CREATE INDEX IF NOT EXISTS idx_authorizations_user_id ON authorizations(user_id)`,
+      `CREATE TABLE IF NOT EXISTS consumer_identities (user_id TEXT PRIMARY KEY, payload_json TEXT NOT NULL)`,
       `CREATE TABLE IF NOT EXISTS uploads (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, hash_key TEXT, payload_json TEXT NOT NULL)`,
       `CREATE INDEX IF NOT EXISTS idx_uploads_hash_key ON uploads(hash_key)`,
       `CREATE TABLE IF NOT EXISTS normalized_reports (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, upload_id TEXT NOT NULL, payload_json TEXT NOT NULL)`,
@@ -103,6 +104,9 @@ export class D1PlatformStore implements PlatformStore {
   async getAuthorizationByUser(userId: Id) { const row = await this.first<{ payload_json: string }>('SELECT payload_json FROM authorizations WHERE user_id = ? ORDER BY rowid DESC LIMIT 1', userId); return row ? JSON.parse(row.payload_json) as AuthorizationRecord : undefined }
   async createAuthorization(record: AuthorizationRecord) { await this.run('INSERT INTO authorizations (id, user_id, payload_json) VALUES (?, ?, ?)', record.id, record.userId, JSON.stringify(record)) }
 
+  async getConsumerIdentity(userId: Id) { const row = await this.first<{ payload_json: string }>('SELECT payload_json FROM consumer_identities WHERE user_id = ?', userId); return row ? JSON.parse(row.payload_json) as ConsumerIdentity : undefined }
+  async saveConsumerIdentity(identity: ConsumerIdentity) { await this.run('INSERT INTO consumer_identities (user_id, payload_json) VALUES (?, ?) ON CONFLICT(user_id) DO UPDATE SET payload_json = excluded.payload_json', identity.userId, JSON.stringify(identity)) }
+
   async getUpload(id: Id) { const row = await this.first<{ payload_json: string }>('SELECT payload_json FROM uploads WHERE id = ?', id); return row ? JSON.parse(row.payload_json) as Upload : undefined }
   async listUploadsForUser(userId: Id) { const rows = await this.all<{ payload_json: string }>('SELECT payload_json FROM uploads WHERE user_id = ?', userId); return rows.map(row => JSON.parse(row.payload_json) as Upload) }
   async getUploadIdByHash(key: string) { const row = await this.first<{ id: string }>('SELECT id FROM uploads WHERE hash_key = ?', key); return row?.id }
@@ -160,7 +164,7 @@ export class D1PlatformStore implements PlatformStore {
     return deleted
   }
   async deleteAccount(userId: Id) {
-    for (const statement of ['DELETE FROM sessions WHERE user_id = ?', 'DELETE FROM workspaces WHERE user_id = ?', 'DELETE FROM authorizations WHERE user_id = ?', 'DELETE FROM auth_tokens WHERE user_id = ?', 'DELETE FROM deletion_jobs WHERE user_id = ?', 'DELETE FROM users WHERE id = ?']) await this.run(statement, userId)
+    for (const statement of ['DELETE FROM sessions WHERE user_id = ?', 'DELETE FROM workspaces WHERE user_id = ?', 'DELETE FROM authorizations WHERE user_id = ?', 'DELETE FROM consumer_identities WHERE user_id = ?', 'DELETE FROM auth_tokens WHERE user_id = ?', 'DELETE FROM deletion_jobs WHERE user_id = ?', 'DELETE FROM users WHERE id = ?']) await this.run(statement, userId)
     await this.run('DELETE FROM audit_events WHERE actor_id = ? OR subject_id = ?', userId, userId)
   }
 

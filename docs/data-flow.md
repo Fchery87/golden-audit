@@ -46,9 +46,13 @@ flowchart TD
   M --> O[Canonical report\nprovenance + confidence]
   N --> O
 
-  O --> P[Consumer review / corrections]
-  P --> Q[Match proposal / split / subgroup confirmation]
+  O --> Q[Match proposal\nunambiguous groups auto-confirm]
   Q --> R[Deterministic analysis core\nevaluateAnalysis()]
+  AI[Attested identity\nname / DOB / SSN last 4 / addresses] --> R
+  Q -. ambiguous groups .-> AMB[Suppressed checks\nnamed in coverage table]
+  AMB --> R
+  S --> CORR[Optional corrections\nextraction exceptions only]
+  CORR -. re-run .-> R
 
   R --> S[Consumer report]
   S --> T[Masked export\nassertSafeConsumerOutput()]
@@ -77,7 +81,8 @@ flowchart TD
 - **Inbound safety**: HTML quarantine checks; PDF `%PDF-` / `/Encrypt` checks
 - **Inbound redaction**: `redactReportText()`
 - **PDF parsing**: `extractBboxFromPdfBytes()` → `parseIdentityIqPdfBbox()`
-- **Consumer review**: `completeReview()` + value correction flow
+- **Attested identity**: `recordConsumerIdentity()`; required before `initializeUpload()`
+- **Optional corrections**: `getValueReview()` lists extraction exceptions only; `reviewValue()` accepts a correction to any value; neither gates analysis
 - **Matching / subgrouping**: `proposeMatches()` + `confirmMatchSubgroup()`
 - **Deterministic analysis**: `runAnalysis()` → `evaluateAnalysis()`
 - **Outbound guard**: `assertSafeConsumerOutput()` on export / narration
@@ -89,6 +94,7 @@ flowchart TD
 |---|---|---|---|---|
 | Registration / sign-in | email, password hash + salt | authenticate consumer | logical `users` / `sessions` | account/session lifecycle |
 | Consent / authorization | jurisdiction, acknowledgements, authorization acceptance timestamp/version | legal gating | logical `consents` / authorization record | retain while account active or as required by policy |
+| Attested identity | full name, date of birth, SSN last four, current and previous addresses, accuracy declaration | reference set for the identity checks; without it those checks cannot run | `consumer_identities` (one row per user) | delete on request — an explicit statement in `deleteAccount`, not a side effect |
 | Upload staging | file name, media type, size, source hash, upload stage | safe ingestion orchestration | logical `uploads` | delete on request / retention schedule |
 | Raw PDF bytes | uploaded report bytes | parse the IdentityIQ PDF | `rawUploadBytes` (private map in prototype) | delete on request; never expose on returned Upload |
 | Sanitized text | redacted HTML/text content | safe extraction | upload sanitized content | delete on request / retention schedule |

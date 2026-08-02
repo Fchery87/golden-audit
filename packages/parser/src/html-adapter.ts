@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import type { Bureau, ParserReport, ParserTradeline, ParserValue } from './types.js'
+import { emptyPersonalInformation } from './types.js'
 
 /**
  * SPIKE-QUALITY structured-HTML extractor (fictitious educational fixture).
@@ -85,5 +86,5 @@ export function parseStructuredHtml(content: string, provider = 'sample-educatio
     })
     rowIndex += 1
   }
-  return { provider, template, reportDate, identity: [], tradelines, inquiries: [], scores: [] }
+  return { provider, template, reportDate, identity: [], personalInformation: emptyPersonalInformation(), tradelines, inquiries: [], scores: [] }
 }

@@ -17,6 +17,7 @@ type ConsumerConsentBody = {
   analysisJurisdiction: string
 }
 type ConsumerAuthorizationBody = { version: string; accepted: boolean }
+type ConsumerIdentityBody = { fullName: unknown; dateOfBirth: unknown; ssnLastFour: unknown; currentAddress: unknown; previousAddresses?: unknown; attestationVersion?: unknown; accurateAndComplete?: unknown }
 type UploadInitBody = { workspaceId: string }
 type UploadCompleteBody = { uploadId: string; token: string; fileName: string; mediaType: string; contentBase64: string }
 type AnalysisKickoffBody = { jurisdiction?: string }
@@ -183,13 +184,39 @@ function resolveRulesetForJurisdiction(platform: ReturnType<typeof loadPilotPlat
   return version
 }
 
+/**
+ * Upload → reading, in one call.
+ *
+ * Parse, match, analyze, render, and export all run here. Nothing in this sequence needs a human
+ * decision: unambiguous account groups confirm themselves, ambiguous ones suppress the checks
+ * that would have used them, and low-confidence values suppress on their own. What used to sit
+ * between the upload and the reading was a per-value confirmation wall the consumer had no way
+ * to answer better than the evidence already did.
+ */
 async function handleKickoffAnalysis(env: PilotPagesEnv, request: any, uploadId: string): Promise<Response> {
   const sessionId = getSessionId(request)
   const body = await readJsonBody(request) as AnalysisKickoffBody
   const platform = loadPilotPlatform(env)
   const jurisdiction = normalizeState(body.jurisdiction ?? 'US-CA')
   const report = await platform.parseReport(sessionId, uploadId)
-  return respondJson({ status: 'value-review-required', reportId: report.id, required: (await platform.getValueReview(sessionId, report.id)).required, decided: 0 }, 202)
+  await platform.proposeMatches(sessionId, report.id)
+  const analysis = await platform.runAnalysis(sessionId, report.id, resolveRulesetForJurisdiction(platform, jurisdiction), jurisdiction)
+  const consumerReport = await platform.createConsumerReport(sessionId, analysis.id)
+  const exportArtifact = await platform.createExport(sessionId, consumerReport.id)
+  return respondJson({ status: 'analysis-complete', reportId: report.id, analysisId: analysis.id, consumerReportId: consumerReport.id, exportId: exportArtifact.id }, 201)
+}
+
+async function handlePendingMatches(env: PilotPagesEnv, request: any, reportId: string): Promise<Response> {
+  return respondJson(await loadPilotPlatform(env).listPendingMatches(getSessionId(request), reportId))
+}
+
+async function handleGetIdentity(env: PilotPagesEnv, request: any): Promise<Response> {
+  const identity = await loadPilotPlatform(env).getConsumerIdentity(getSessionId(request))
+  return respondJson({ identity: identity ?? null })
+}
+async function handleRecordIdentity(env: PilotPagesEnv, request: any): Promise<Response> {
+  const body = await readJsonBody(request) as ConsumerIdentityBody
+  return respondJson(await loadPilotPlatform(env).recordConsumerIdentity(getSessionId(request), body), 201)
 }
 
 async function handleValueReview(env: PilotPagesEnv, request: any, reportId: string): Promise<Response> {
@@ -199,13 +226,17 @@ async function handleValueDecision(env: PilotPagesEnv, request: any, reportId: s
   const body = await readJsonBody(request) as ReviewValueBody
   return respondJson(await loadPilotPlatform(env).reviewValue(getSessionId(request), reportId, valueId, body))
 }
+/** Closing the optional corrections pass re-runs analysis so any correction actually reaches the
+ *  reading. Nothing is gated on it — a consumer who never opens it still has a delivered report. */
 async function handleCompleteValueReview(env: PilotPagesEnv, request: any, reportId: string): Promise<Response> {
+  const sessionId = getSessionId(request)
   const platform = loadPilotPlatform(env)
-  await platform.completeReview(getSessionId(request), reportId)
-  const matches = await platform.proposeMatches(getSessionId(request), reportId)
-  const unresolved = matches.filter(match => match.state !== 'confirmed' && match.state !== 'rejected')
-  if (unresolved.length > 0) return respondJson({ status: 'match-review-required', reportId, matches }, 202)
-  return respondJson({ status: 'review-complete', reportId, matches }, 201)
+  await platform.completeReview(sessionId, reportId)
+  const jurisdiction = normalizeState('US-CA')
+  const analysis = await platform.runAnalysis(sessionId, reportId, resolveRulesetForJurisdiction(platform, jurisdiction), jurisdiction)
+  const consumerReport = await platform.createConsumerReport(sessionId, analysis.id)
+  const exportArtifact = await platform.createExport(sessionId, consumerReport.id)
+  return respondJson({ status: 'analysis-complete', reportId, analysisId: analysis.id, consumerReportId: consumerReport.id, exportId: exportArtifact.id }, 201)
 }
 
 async function handleMatchDecision(env: PilotPagesEnv, request: any, matchId: string): Promise<Response> {
@@ -339,6 +370,8 @@ async function route(context: { request: any; env: PilotPagesEnv }): Promise<Res
   if (request.method === 'POST' && path === '/api/consumer/password-reset/confirm') return handlePasswordResetConfirm(env, request)
   if (request.method === 'POST' && path === '/api/consumer/email-verification/request') return handleEmailVerificationRequest(env, request)
   if (request.method === 'POST' && path === '/api/consumer/email-verification/confirm') return handleVerifyEmail(env, request)
+  if (request.method === 'GET' && path === '/api/consumer/identity') return handleGetIdentity(env, request)
+  if (request.method === 'POST' && path === '/api/consumer/identity') return handleRecordIdentity(env, request)
   if (request.method === 'POST' && path === '/api/consumer/consent') return handleConsent(env, request)
   if (request.method === 'POST' && path === '/api/consumer/authorization') return handleAuthorization(env, request)
   if (request.method === 'POST' && path === '/api/consumer/uploads/init') return handleUploadInit(env, request)
@@ -350,6 +383,8 @@ async function route(context: { request: any; env: PilotPagesEnv }): Promise<Res
   if (request.method === 'POST' && match) return handleCompleteValueReview(env, request, match[1] ?? '')
   match = matchPrefix(path, /^\/api\/consumer\/reports\/([^/]+)\/values\/([^/]+)\/decision$/)
   if (request.method === 'POST' && match) return handleValueDecision(env, request, match[1] ?? '', match[2] ?? '')
+  match = matchPrefix(path, /^\/api\/consumer\/reports\/([^/]+)\/pending-matches$/)
+  if (request.method === 'GET' && match) return handlePendingMatches(env, request, match[1] ?? '')
   match = matchPrefix(path, /^\/api\/consumer\/uploads\/([^/]+)\/kickoff-analysis$/)
   if (request.method === 'POST' && match) return handleKickoffAnalysis(env, request, match[1] ?? '')
   match = matchPrefix(path, /^\/api\/consumer\/matches\/([^/]+)\/decision$/)
